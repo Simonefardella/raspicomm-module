@@ -1,10 +1,10 @@
 # raspicomm-module
 raspicomm kernel module with tty driver support for rs485 (raspicommrs485.ko)
 
-## U
+## Non-Raspbian kernels
 Because I'm going through the motions of cross compiling the rs485 module for other Linux kernels, I thought I might as well host them on GitHub and (possibly) save time for other people doing the same thing.
 
-At some point I'll write up a wiki so if I'm mown down by sleeping on someone else's lawn, you'll be able to cross-compile future kernel versions yourself.
+Currently I've only compiled for the *3.18.0-20-rpi2* kernel, intended for the (non-snappy) Ubuntu Raspberry Pi port.
 
 ## Installation Instructions
 
