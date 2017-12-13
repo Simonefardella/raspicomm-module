@@ -2,7 +2,9 @@ obj-m += raspicommrs485.o
 
 raspicommrs485-objs := module.o queue.o
 
-all:
+all: allmodules spi0devdis.dtbo
+
+allmodules:
 	$(MAKE) -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules
 
 clean:
@@ -11,4 +13,7 @@ clean:
 install: all
 	sudo cp raspicommrs485.ko /lib/modules/$(shell uname -r)/kernel/drivers/tty/serial/
 	sudo depmod -a
+
+spi0devdis.dtbo: spi0devdis.dts
+	dtc -@ -I dts -O dtb -o spi0devdis.dtbo spi0devdis.dts
 
