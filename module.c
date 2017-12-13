@@ -11,9 +11,14 @@
 #include <linux/tty_flip.h>
 #include <linux/serial.h>
 #include <linux/version.h>    /* needed for KERNEL_VERSION() macro */
+#if 0 // +++--
 #include <asm/io.h>           // Needed for ioremap & iounmap
 #include <asm/uaccess.h>
+#endif
+#include <linux/spi/spi.h>
+#if 0 // +++--
 #include "platform.h"
+#endif
 #include "module.h"
 #include "queue.h"     // needed for queue_xxx functions
 
@@ -22,12 +27,14 @@ static const int RaspicommMajorDriverNumber = 0;
 
 static DEFINE_SPINLOCK(dev_lock);
 
+#if 0 // +++--
 // struct that holds the gpio configuration
 typedef struct {
   int gpio;             // set to the gpio that should be requested
   int gpio_alternative; // set to the alternative that the gpio should be configured
   int gpio_requested;   // set if the gpio was successfully requested, otherwise 0
 } gpioconfig;
+#endif
 
 typedef enum {
   STOPBITS_ONE = 0,
@@ -77,6 +84,18 @@ typedef enum {
 #define MAX3140_READ_DATA ( 0 )
 #define MAX3140_WRITE_DATA ( MAX3140_UART_R )
 
+// funny that this function is not standard
+static inline int
+spi_transceive(struct spi_device *spi, void *tx_buf, void *rx_buf, size_t len)
+{
+	struct spi_transfer	t = {
+			.tx_buf		= tx_buf,
+			.rx_buf		= rx_buf,
+			.len		= len,
+		};
+
+	return spi_sync_transfer(spi, &t, 1);
+}
 
 // ****************************************************************************
 // **** START raspicomm private functions ****
@@ -103,15 +122,19 @@ static void          raspicomm_rs485_received(struct tty_struct* tty, char c);
 
 irqreturn_t          raspicomm_irq_handler(int irq, void* dev_id);
 
+#if 0 // +++--
 static bool                   raspicomm_spi0_init(void);
 volatile static unsigned int* raspicomm_spi0_init_mem(void);
 static int                    raspicomm_spi0_init_gpio(void);
 static void                   raspicomm_spi0_init_gpio_alt(int gpio, int alt);
 static void                   raspicomm_spi0_deinit_gpio(void);
+#endif
 static int                    raspicomm_spi0_init_irq(void);
 static void                   raspicomm_spi0_deinit_irq(void);
+#if 0 // +++--
 static void                   raspicomm_spi0_init_port(void);
 static void                   raspicomm_spi0_deinit_mem(volatile unsigned int* spi0);
+#endif
 
 // ****************************************************************************
 // *** END raspicomm private functions ****
@@ -197,8 +220,11 @@ static int SwBacksleep;
 // config setting of the spi0
 static int SpiConfig;
 
+static struct spi_device *spi_slave;
+#if 0 // +++--
 // Spi0 memory interface pointer
 volatile static unsigned int* Spi0;
+#endif
 
 // The requested gpio (set by raspicomm_spi0_init_gpio and freed by raspicomm_spi0_deinit_gpio)
 static int Gpio;
@@ -206,8 +232,10 @@ static int Gpio;
 // The interrupt that signals when data is available
 static int Gpio17_Irq;
 
+#if 0 // +++--
 // the configured gpios
 static gpioconfig GpioConfigs[] =  { {7}, {8}, {9}, {10}, {11} };
+#endif
 
 // ****************************************************************************
 // **** END raspicomm private fields
@@ -232,16 +260,42 @@ module_exit(raspicomm_exit);
 // initialization function that gets called when the module is loaded
 static int __init raspicomm_init()
 {
+  struct spi_master *master;
+  struct spi_board_info spi_device_info = {
+        .modalias = "raspicommrs485",
+        .max_speed_hz = 1000000, //speed of your device splace can handle
+        .bus_num = 0, //BUS number
+        .chip_select = 0,
+        .mode = SPI_MODE_0,
+  };
+#if 0 // +++--
   Gpio = Gpio17_Irq = -EINVAL;;
+#endif
   SpiConfig = 0;
 
   // log the start of the initialization
   LOG("kernel module initialization");
 
+  master = spi_busnum_to_master(0);
+  if(!master)
+  {
+    return -ENODEV;
+  }
+  spi_slave = spi_new_device(master, &spi_device_info);
+  if(!spi_slave)
+  {
+    return -ENODEV;
+  }
+  if( !raspicomm_spi0_init_irq() )
+  {
+    return -ENODEV;
+  }
+#if 0 // +++--
   // initialize the spi0
   if (!raspicomm_spi0_init()) {
     return -ENODEV;
   }
+#endif
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
 
@@ -311,14 +365,22 @@ static void __exit raspicomm_exit()
 
   put_tty_driver(raspicommDriver);
 
+#if 0 // +++--
   // free mapped memory
   raspicomm_spi0_deinit_mem(Spi0);
+#endif
 
   // free the irq
   raspicomm_spi0_deinit_irq();
 
+#if 0 // +++--
   // free gpio
   raspicomm_spi0_deinit_gpio();
+#endif
+  if( spi_slave )
+  {
+    spi_unregister_device(spi_slave);
+  }
 
   // log the unloading of the rs-485 module
   LOG("kernel module exit");
@@ -457,6 +519,23 @@ static void raspicomm_start_transfer() {
 
 static int raspicomm_spi0_send(unsigned int mosi)
 {
+  unsigned char tx[2], rx[2];
+  int rc;
+
+  //LOG ("raspicomm_spi0_send(%X): %X spi0+1 %X spi0+2 %X", mosi, SPI0_CNTLSTAT, SPI0_FIFO, SPI0_CLKSPEED );
+  tx[0] = mosi >> 8;
+  tx[1] = mosi;
+  rc = spi_transceive( spi_slave, tx, rx, 2 );
+  if( rc < 0 )
+  {
+    return 0;
+  }
+  return (tx[0] << 8) | tx[1];
+}
+
+#if 0 // +++--
+static int raspicomm_spi0_send(unsigned int mosi)
+{
   // TODO direct pointer access should not be used -> use kernel functions iowriteX() instead see http://www.makelinux.net/ldd3/chp-9-sect-4
   unsigned char v1,v2;
   int status;
@@ -541,6 +620,7 @@ volatile static unsigned int* raspicomm_spi0_init_mem(void)
 
   return p;
 }
+#endif
 
 // irq handler, that gets fired when the gpio 17 falling edge occurs
 irqreturn_t raspicomm_irq_handler(int irq, void* dev_id)
@@ -591,6 +671,7 @@ irqreturn_t raspicomm_irq_handler(int irq, void* dev_id)
   return IRQ_HANDLED;
 }
 
+#if 0 // +++--
 // sets the specified gpio to the alternative function from the argument
 static void raspicomm_spi0_init_gpio_alt(int gpio, int alt)
 {
@@ -664,6 +745,7 @@ static void raspicomm_spi0_deinit_gpio()
     }
   }
 }
+#endif
 
 static int raspicomm_spi0_init_irq()
 {  
@@ -737,6 +819,7 @@ static void raspicomm_spi0_deinit_irq()
 
 }
 
+#if 0 // +++--
 // initializes the spi0 using the memory region Spi0
 static void raspicomm_spi0_init_port()
 {
@@ -757,6 +840,7 @@ static void raspicomm_spi0_deinit_mem(volatile unsigned int* spi0)
   if (spi0 != NULL)
     iounmap(spi0);
 }
+#endif
 
 // this function pushes a received character to the opened tty device, called by the interrupt function
 static void raspicomm_rs485_received(struct tty_struct* tty, char c)
