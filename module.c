@@ -520,7 +520,7 @@ static int raspicomm_max3140_get_parity_flag( char c )
 static void raspicomm_start_transfer()
 {
     int rxdata, txdata;
-    // AHB
+    // a place to store the previous spin lock state
     unsigned long flags; 
     // AHB vor Eintritt
     spin_lock_irqsave( &dev_lock, flags ); 
@@ -715,9 +715,12 @@ static int raspicommDriver_write( struct tty_struct* tty,
     const unsigned char* buf, int count )
 {
     int bytes_written = 0;
+    // a place to store the previous spin lock state
+    unsigned long flags; 
 
     LOG( "raspicommDriver_write(count=%i)\n", count );
 
+    spin_lock_irqsave( &dev_lock, flags );
     while( bytes_written < count )
     {
         if( queue_enqueue( &TxQueue, buf[bytes_written] ) )
@@ -727,11 +730,14 @@ static int raspicommDriver_write( struct tty_struct* tty,
         else
         {
             // kein Platz mehr vorhanden --> schlafen, senden
+            spin_unlock_irqrestore( &dev_lock, flags ); 
             cpu_relax();
 
             raspicomm_start_transfer();
+            spin_lock_irqsave( &dev_lock, flags );
         } 
     }
+    spin_unlock_irqrestore( &dev_lock, flags ); 
     // AHB Sorge dafür, dass der TBE interrupt auf jeden Fall aktiviert wird
     // (falls nicht bereits oben bei Platzmangel)
     raspicomm_start_transfer();
