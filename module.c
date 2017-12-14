@@ -596,7 +596,7 @@ static irqreturn_t raspicomm_irq_handler( int irq, void* dev_id )
         raspicomm_rs485_received( OpenTTY, rxdata & 0x00FF );
         LOG( "raspicomm_irq recv: 0x%X", rxdata );
     }
-    else if( rxdata & MAX3140_UART_T )
+    if( rxdata & MAX3140_UART_T )
     {
         // the transmit buffer is empty
         // get the data to send from the transmit queue
