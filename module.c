@@ -744,7 +744,8 @@ static int raspicommDriver_chars_in_buffer( struct tty_struct * tty )
 }
 
 // called by the kernel when cfsetattr() is called from userspace
-static void raspicommDriver_set_termios( struct tty_struct* tty, struct ktermios* kt )
+static void raspicommDriver_set_termios( struct tty_struct* tty,
+                struct ktermios* kt )
 {
     int cflag;
     speed_t baudrate; Databits databits; Parity parity; Stopbits stopbits;
