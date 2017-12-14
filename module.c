@@ -143,6 +143,7 @@ static int raspicommDriver_ioctl( struct tty_struct* tty,
 static void raspicommDriver_throttle( struct tty_struct * tty );
 static void raspicommDriver_unthrottle( struct tty_struct * tty );
 static void raspicomm_start_transfer( void );
+static void raspicomm_tasklet_func( unsigned long arg );
 
 // ****************************************************************************
 // **** END raspicommDriver functions ****
@@ -200,6 +201,8 @@ static struct spi_device *spi_slave;
 
 static unsigned int irqGPIO;
 static unsigned int irqNumber;
+
+DECLARE_TASKLET( raspicomm_tasklet, raspicomm_tasklet_func, 0 );
 
 // ****************************************************************************
 // **** END raspicomm private fields
@@ -267,7 +270,7 @@ static int __init raspicomm_init( void )
     int result;
 
     // log the start of the initialization
-    LOG( "kernel module initialization" );
+    LOG( "kernel module initialization 1" );
 
 
     LOG( "initializing globals" );
@@ -508,45 +511,10 @@ static int raspicomm_max3140_get_parity_flag( int n )
     }
 }
 
-#if 0 // +++--
-static int raspicomm_max3140_get_parity_flag( char c )
-{
-    // even parity: is 1 if number of ones is odd
-    // -> making number of bits of value and parity = even
-    // odd parity: is 1 if the number of ones is even
-    // -> making number of bits of value and parity = odd
-
-    int parityEven = ParityIsEven;
-    int parityEnabled = ParityEnabled;
-    int count = 0, i;
-    int ret;
-
-    if( parityEnabled == 0 )
-        return 0;
-
-    // count the number of ones    
-     for( i = 0; i < 8; i++ )
-         if( c & (1 << i) )
-             count++;
-
-     if( parityEven )
-         ret = (count % 2) ? MAX3140_wd_Pt : 0;
-     else
-         ret = (count % 2) ? 0 : MAX3140_wd_Pt;
-
-     LOG( "raspicomm_max3140_get_parity_flag(c=%c) parityEven=%i, count=%i, ret=%i", c, parityEven, count, ret );
-
-     return ret;
-}
-#endif
-
+// dev_lock mustbe locked before calling this function
 static void raspicomm_start_transfer()
 {
     int rxdata, txdata;
-    // a place to store the previous spin lock state
-    unsigned long flags; 
-    // AHB vor Eintritt
-    spin_lock_irqsave( &dev_lock, flags ); 
 
     // TBE-interrupt enable, falls das noch nicht erledigt ist
     if( SpiConfig & MAX3140_UART_TM )
@@ -554,14 +522,17 @@ static void raspicomm_start_transfer()
         // bereits eingeschaltet --> nichts mehr tun,
         // der TBE-IR sorgt schon irgendwann für ein Leeren der Queue
         rxdata = 0;
+        LOG( "raspicomm_start_transfer: already transmitting" );
     }
     else
     {
         // noch nicht eingeschaltet --> jetzt einschalten
         SpiConfig = SpiConfig | MAX3140_WRITE_CONFIG | MAX3140_UART_TM;
         rxdata = raspicomm_spi0_send( SpiConfig );
+    tasklet_schedule( &raspicomm_tasklet );
     }
 
+#if 0
     if( rxdata & MAX3140_UART_T )
     {
         // TBE --> senden möglich
@@ -572,42 +543,98 @@ static void raspicomm_start_transfer()
             rxdata = raspicomm_spi0_send( MAX3140_WRITE_DATA | txdata | raspicomm_max3140_get_parity_flag( (char)txdata) );
             // AHB
             LOG( "raspicomm_start_transfer: 0x%X --> 0x%X", txdata, rxdata ); 
-        } 
+        }
+        else
+        {
+            LOG( "raspicomm_start_transfer: no data to send???" ); 
+        }
     }
-
-    // AHB Freigabe des Locks
-    spin_unlock_irqrestore( &dev_lock, flags ); 
+#endif
 }
 
-static int raspicomm_spi0_send( unsigned int mosi )
+static int raspicomm_spi0_send( unsigned int tx )
 {
-    unsigned char tx[2], rx[2];
+    unsigned char txbuf[2], rxbuf[2];
+    unsigned int rx;
     int rc;
 
-    tx[0] = mosi >> 8;
-    tx[1] = mosi;
-    rc = spi_transceive( spi_slave, tx, rx, 2 );
+    txbuf[0] = tx >> 8;
+    txbuf[1] = tx;
+    rc = spi_transceive( spi_slave, txbuf, rxbuf, 2 );
     if( rc < 0 )
     {
         printk( KERN_ERR "spi_transceive( %02X %02X failed with code %d",
-                tx[0], tx[1], rc );
+                txbuf[0], txbuf[1], rc );
         return 0;
     }
-    LOG( "raspicomm_spi0_send => %02X %02X <= %02X %02X", tx[0], tx[1], rx[0], rx[1] );
-    return (tx[0] << 8) | tx[1];
+    rx = (rxbuf[0] << 8) | rxbuf[1];
+#if 1
+    LOG( "raspicomm_spi0_send => %02X %02X <= %02X %02X",
+                txbuf[0], txbuf[1], rxbuf[0], rxbuf[1] );
+#else
+    {
+        char buffer[256];
+        switch( tx>>14 )
+        {
+            case 0:
+                sprintf( buffer, "RdDat %02X %02X -- %02X %02X R=%d T=%d RA/FE=%d CTS=%d P=%d D=%02X",
+                    txbuf[0], txbuf[1],
+                    rxbuf[0], rxbuf[1],
+                    (rx>>15)&1, (rx>>14)&1,
+                    (rx>>10)&1, (rx>>9)&1, (rx>>8)&1, rx&255 );
+                break;
+            case 1:
+                sprintf( buffer, "RdCfg %02X %02X TEST=%d -- %02X %02X R=%d T=%d FEN=%d SHDN=%d TM=%d RM=%d PM=%d RAM=%d IR=%d ST=%d PE=%d L=%d B3=%X",
+                    txbuf[0], txbuf[1],
+                    tx&1,
+                    rxbuf[0], rxbuf[1],
+                    (rx>>15)&1, (rx>>14)&1, (rx>>13)&1, (rx>>12)&1,
+                    (rx>>11)&1, (rx>>10)&1, (rx>>9)&1, (rx>>8)&1,
+                    (rx>>7)&1, (rx>>6)&1, (rx>>5)&1, (rx>>4)&1,
+                    rx&15 );
+                break;
+            case 2:
+                sprintf( buffer, "WrDat %02X %02X TE=%d RTS=%d P=%d D=%02X -- %02X %02X R=%d T=%d RA/FE=%d CTS=%d P=%d D=%02X",
+                    txbuf[0], txbuf[1],
+                    (tx>>10)&1, (tx>>9)&1, (tx>>8)&1, tx&255,
+                    rxbuf[0], rxbuf[1],
+                    (rx>>15)&1, (rx>>14)&1,
+                    (rx>>10)&1, (rx>>9)&1, (rx>>8)&1, rx&255 );
+                break;
+            case 3:
+                sprintf( buffer, "WrCfg %02X %02X FEN=%d SHDN=%d TM=%d RM=%d PM=%d RAM=%d IR=%d ST=%d PE=%d L=%d BR=%X -- %02X %02X R=%d T=%d",
+                    txbuf[0], txbuf[1],
+                    (tx>>13)&1, (tx>>12)&1, (tx>>11)&1, (tx>>10)&1,
+                    (tx>>9)&1, (tx>>8)&1, (tx>>7)&1, (tx>>6)&1,
+                    (tx>>5)&1, (tx>>4)&1, tx&15,
+                    rxbuf[0], rxbuf[1],
+                    (rx>>15)&1, (rx>>14)&1 );
+                break;
+        }
+        LOG( "%s", buffer );
+    }
+#endif
+    return rx;
 }
 
-// irq handler, that gets fired when the gpio 17 falling edge occurs
 static irqreturn_t raspicomm_irq_handler( int irq, void* dev_id )
 {
-    int rxdata, txdata;
-    // a place to store the previous spin lock state
-    unsigned long flags;
+    LOG( "raspicomm_irq_handler" );
+    tasklet_schedule( &raspicomm_tasklet );
+    LOG( "tasklet enabled" );
+    return IRQ_HANDLED;
+}
 
+static void raspicomm_tasklet_func( unsigned long arg )
+{
+    int rxdata, txdata;
+
+    LOG( "raspicomm_tasklet_func entered" );
     // AHB Der Zugriff auf den UART wird durch einen Spinlock abgesichert
     // (exklusiver Zugriff), somit kann auch
     //         ... start_transfer() auf die UART zugreifen
-    spin_lock_irqsave( &dev_lock, flags );
+    spin_lock_bh( &dev_lock );
+    LOG( "irq locked" );
 
     // issue a read command to discover the cause of the interrupt
     rxdata = raspicomm_spi0_send( MAX3140_READ_DATA );
@@ -639,9 +666,12 @@ static irqreturn_t raspicomm_irq_handler( int irq, void* dev_id )
             // before disabling RTS, else the transmission is broken
             // AHB Erläuterung: Microsekunden Verzögerung:
             // 10.000.000/Baudrate: 9600 --> ca. 1 mSec
-            spin_unlock_irqrestore( &dev_lock, flags ); 
+            spin_unlock_bh( &dev_lock ); 
+            LOG( "irq delay" );
             udelay( SwBacksleep ); 
-            spin_lock_irqsave( &dev_lock, flags );
+            LOG( "irq lock 2" );
+            spin_lock_bh( &dev_lock );
+            LOG( "irq locked 2" );
 
             // did anybody add more daya to send?
             if( queue_dequeue( &TxQueue, &txdata ) )
@@ -662,16 +692,17 @@ static irqreturn_t raspicomm_irq_handler( int irq, void* dev_id )
     } 
 
     // AHB Freigabe des Locks
-    spin_unlock_irqrestore( &dev_lock, flags ); 
+    spin_unlock_bh( &dev_lock ); 
 
-    return IRQ_HANDLED;
+    LOG( "raspicomm_tasklet_func done" );
+    // return IRQ_HANDLED;
 }
 
 // this function pushes a received character to the opened tty device,
 // called by the interrupt function
 static void raspicomm_rs485_received( struct tty_struct* tty, char c )
 {
-    LOG( "raspicomm_rs485_received(c=%c)", c );
+    LOG( "raspicomm_rs485_received(c=%02X)", c );
 
     if( tty != NULL && tty->port != NULL )
     {
@@ -738,12 +769,11 @@ static int raspicommDriver_write( struct tty_struct* tty,
     const unsigned char* buf, int count )
 {
     int bytes_written = 0;
-    // a place to store the previous spin lock state
-    unsigned long flags; 
 
     LOG( "raspicommDriver_write(count=%i)\n", count );
 
-    spin_lock_irqsave( &dev_lock, flags );
+    spin_lock_bh( &dev_lock );
+    LOG( "locked" );
     while( bytes_written < count )
     {
         if( queue_enqueue( &TxQueue, buf[bytes_written] ) )
@@ -753,18 +783,23 @@ static int raspicommDriver_write( struct tty_struct* tty,
         else
         {
             // kein Platz mehr vorhanden --> schlafen, senden
-            spin_unlock_irqrestore( &dev_lock, flags ); 
+            spin_unlock_bh( &dev_lock ); 
+            LOG( "life is boring" );
             // (mf) is this the right order and the right thing to do here? +++
             cpu_relax();
 
+            LOG( "yawn" );
+            spin_lock_bh( &dev_lock );
             raspicomm_start_transfer();
-            spin_lock_irqsave( &dev_lock, flags );
         } 
     }
-    spin_unlock_irqrestore( &dev_lock, flags ); 
+    LOG( "starting transfer" );
     // AHB Sorge dafür, dass der TBE interrupt auf jeden Fall aktiviert wird
     // (falls nicht bereits oben bei Platzmangel)
     raspicomm_start_transfer();
+    LOG( "unlocking" );
+    spin_unlock_bh( &dev_lock ); 
+    LOG( "raspicommDriver_write done" );
 
     return bytes_written;
 }
