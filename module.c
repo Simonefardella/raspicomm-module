@@ -1,3 +1,5 @@
+// vim: et:ts=2:sw=2:smarttab
+
 #include <linux/module.h>     // Needed by all modules
 #include <linux/kernel.h>     // Needed for KERN_INFO
 #include <linux/init.h>       // Needed for the macros
