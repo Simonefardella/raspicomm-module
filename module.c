@@ -731,6 +731,7 @@ static int raspicommDriver_write( struct tty_struct* tty,
         {
             // kein Platz mehr vorhanden --> schlafen, senden
             spin_unlock_irqrestore( &dev_lock, flags ); 
+            // (mf) is this the right order and the right thing to do here? +++
             cpu_relax();
 
             raspicomm_start_transfer();
