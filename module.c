@@ -616,12 +616,25 @@ static irqreturn_t raspicomm_irq_handler( int irq, void* dev_id )
             // before disabling RTS, else the transmission is broken
             // AHB Erläuterung: Microsekunden Verzögerung:
             // 10.000.000/Baudrate: 9600 --> ca. 1 mSec
+            spin_unlock_irqrestore( &dev_lock, flags ); 
             udelay( SwBacksleep ); 
+            spin_lock_irqsave( &dev_lock, flags );
 
-            // enable receive by disabling RTS (TE set so that no data is sent)
-            raspicomm_spi0_send( MAX3140_WRITE_DATA_R | MAX3140_WRITE_DATA_RTS | MAX3140_WRITE_DATA_TE );
-            // AHB
-            LOG( "raspicomm_irq RTS disabled --> receiving..." ); 
+            // did anybody add more daya to send?
+            if( queue_dequeue( &TxQueue, &txdata ) )
+            {
+                // send the data (RTS enabled) AHB rxdata für Log
+                rxdata = raspicomm_spi0_send( MAX3140_WRITE_DATA | txdata | raspicomm_max3140_get_parity_flag( (char)txdata ) );
+                LOG( "raspicomm_irq sent: 0x%X --> 0x%X", txdata, rxdata );
+            }
+            else
+            {
+                // enable receive by disabling RTS
+                // (TE set so that no data is sent)
+                raspicomm_spi0_send( MAX3140_WRITE_DATA_R | MAX3140_WRITE_DATA_RTS | MAX3140_WRITE_DATA_TE );
+                // AHB
+                LOG( "raspicomm_irq RTS disabled --> receiving..." ); 
+            }
         }
     } 
 
