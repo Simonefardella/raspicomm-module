@@ -1,5 +1,4 @@
 // vim: et:ts=2:sw=2:smarttab
-
 #include <linux/module.h>     // Needed by all modules
 #include <linux/kernel.h>     // Needed for KERN_INFO
 #include <linux/init.h>       // Needed for the macros
@@ -13,14 +12,9 @@
 #include <linux/tty_flip.h>
 #include <linux/serial.h>
 #include <linux/version.h>    /* needed for KERNEL_VERSION() macro */
-#if 0 // +++--
-#include <asm/io.h>           // Needed for ioremap & iounmap
-#include <asm/uaccess.h>
-#endif
 #include <linux/spi/spi.h>
-#if 0 // +++--
-#include "platform.h"
-#endif
+#include <linux/string.h>
+#define DEBUG
 #include "module.h"
 #include "queue.h"     // needed for queue_xxx functions
 
@@ -28,15 +22,6 @@
 static const int RaspicommMajorDriverNumber = 0;
 
 static DEFINE_SPINLOCK(dev_lock);
-
-#if 0 // +++--
-// struct that holds the gpio configuration
-typedef struct {
-  int gpio;             // set to the gpio that should be requested
-  int gpio_alternative; // set to the alternative that the gpio should be configured
-  int gpio_requested;   // set if the gpio was successfully requested, otherwise 0
-} gpioconfig;
-#endif
 
 typedef enum {
   STOPBITS_ONE = 0,
@@ -122,20 +107,14 @@ static int           raspicomm_spi0_send(unsigned int mosi);
 
 static void          raspicomm_rs485_received(struct tty_struct* tty, char c);
 
-irqreturn_t          raspicomm_irq_handler(int irq, void* dev_id);
+static irqreturn_t   raspicomm_irq_handler(int irq, void* dev_id);
+#if 0 // +++--
+static irqreturn_t raspicomm_irq_handler(unsigned int irq, void *dev_id, struct pt_regs *regs);
+#endif
 
 #if 0 // +++--
-static bool                   raspicomm_spi0_init(void);
-volatile static unsigned int* raspicomm_spi0_init_mem(void);
-static int                    raspicomm_spi0_init_gpio(void);
-static void                   raspicomm_spi0_init_gpio_alt(int gpio, int alt);
-static void                   raspicomm_spi0_deinit_gpio(void);
-#endif
-static int                    raspicomm_spi0_init_irq(void);
+static int                    raspicomm_spi0_init_irq( int pin );
 static void                   raspicomm_spi0_deinit_irq(void);
-#if 0 // +++--
-static void                   raspicomm_spi0_init_port(void);
-static void                   raspicomm_spi0_deinit_mem(volatile unsigned int* spi0);
 #endif
 
 // ****************************************************************************
@@ -199,16 +178,14 @@ static const struct tty_operations raspicomm_ops = {
 // the driver instance
 static struct tty_driver* raspicommDriver;
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
 static struct tty_port Port;
-#endif
 
 // the number of open() calls
-static int OpenCount = 0;
+static int OpenCount;
 
 // ParityIsEven == true ? even : odd
-static int ParityIsEven = 1;
-static int ParityEnabled = 0;
+static int ParityIsEven;
+static int ParityEnabled;
 
 // currently opened tty device
 static struct tty_struct* OpenTTY = NULL;
@@ -223,21 +200,18 @@ static int SwBacksleep;
 static int SpiConfig;
 
 static struct spi_device *spi_slave;
-#if 0 // +++--
-// Spi0 memory interface pointer
-volatile static unsigned int* Spi0;
-#endif
 
+static unsigned int irqGPIO;
+static unsigned int irqNumber;
+
+#if 0 // +++--
 // The requested gpio (set by raspicomm_spi0_init_gpio and freed by raspicomm_spi0_deinit_gpio)
 static int Gpio;
 
 // The interrupt that signals when data is available
 static int Gpio17_Irq;
-
-#if 0 // +++--
-// the configured gpios
-static gpioconfig GpioConfigs[] =  { {7}, {8}, {9}, {10}, {11} };
 #endif
+
 
 // ****************************************************************************
 // **** END raspicomm private fields
@@ -259,6 +233,35 @@ module_exit(raspicomm_exit);
 // ****************************************************************************
 // **** START raspicomm private function implementations
 // ****************************************************************************
+
+static void raspicomm_cleanup(void)
+{
+  LOG( "cleanup all" );
+  if( raspicommDriver )
+  {
+    LOG( "tty_unregister_driver" );
+    tty_unregister_driver( raspicommDriver );
+    LOG( "put_tty_driver" );
+    put_tty_driver( raspicommDriver );
+  }
+  if( irqNumber >= 0 )
+  {
+    LOG( "free_irq" );
+    free_irq( irqNumber, NULL );
+  }
+  if( irqGPIO >= 0 )
+  {
+    LOG( "gpio_free" );
+    gpio_free( irqGPIO );
+  }
+  if( spi_slave )
+  {
+    LOG( "spi_unregister_device" );
+    spi_unregister_device( spi_slave );
+  }
+  LOG( "cleanup done" );
+}
+
 // initialization function that gets called when the module is loaded
 static int __init raspicomm_init()
 {
@@ -270,55 +273,123 @@ static int __init raspicomm_init()
         .chip_select = 0,
         .mode = SPI_MODE_0,
   };
-#if 0 // +++--
-  Gpio = Gpio17_Irq = -EINVAL;;
-#endif
-  SpiConfig = 0;
+  int pin = 17;
+  int result;
 
   // log the start of the initialization
   LOG("kernel module initialization");
 
+
+  LOG( "initializing globals" );
+  raspicommDriver = NULL;
+  memset( &Port, 0, sizeof(Port) );
+  OpenCount = 0;
+  ParityIsEven = 1;
+  ParityEnabled = 0;
+  OpenTTY = NULL;
+  memset( &TxQueue, 0, sizeof(TxQueue) );
+  SwBacksleep = 0;
+  SpiConfig = 0;
+  spi_slave = NULL;
+  irqGPIO = -EINVAL;
+  irqNumber = -EINVAL;
+
+  LOG( "spi_busnum_to_master" );
   master = spi_busnum_to_master(0);
   if(!master)
   {
-    return -ENODEV;
+    printk( KERN_ERR "spi_busnum_to_master failed");
+    goto cleanup;
   }
+  LOG( "spi_new_device" );
   spi_slave = spi_new_device(master, &spi_device_info);
   if(!spi_slave)
   {
-    return -ENODEV;
-  }
-  if( !raspicomm_spi0_init_irq() )
-  {
-    return -ENODEV;
+    printk( KERN_ERR "spi_new_device failed");
+    goto cleanup;
   }
 #if 0 // +++--
-  // initialize the spi0
-  if (!raspicomm_spi0_init()) {
-    return -ENODEV;
+  LOG( "raspicomm_spi0_init_irq" );
+  if( !raspicomm_spi0_init_irq( 17 ) )
+  {
+    printk( KERN_ERR "raspicomm_spi0_init_irq failed");
+    goto 
   }
 #endif
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
+  // Request a GPIO pin from the driver
+  LOG( "gpio_request" );
+  result = gpio_request( pin, "rpc0irq" );
+  if( result < 0 )
+  {
+    printk( KERN_ERR "gpio_request failed with code %d", result );
+    goto cleanup;
+  }
+  irqGPIO = pin;
+  // 'irqGPIO' is expected to be an unsigned int, i.e. the GPIO number
+  // Set GPIO as input
+  LOG( "gpio_direction_input" );
+  result = gpio_direction_input( irqGPIO );
+  if( result < 0 )
+  {
+    printk( KERN_ERR "gpio_direction_input failed with code %d", result );
+    goto cleanup;
+  }
+#if 0 // +++ should we set this to 0?
+  // Set a 50ms debounce, adjust to your needs
+  result = gpio_set_debounce( irqGPIO, 50 );
+  if( result < 0 )
+  {
+    printk( KERN_ERR "gpio_set_debounce failed with code %d", result );
+    goto cleanup;
+  }
+#endif
+#if 0 // +++--
+  // The GPIO will appear in /sys/class/gpio
+  result = gpio_export( irqGPIO );
+  if( result < 0 )
+  {
+    printk( KERN_ERR "gpio_export failed with code %d", result );
+    goto cleanup;
+  }
+#endif
+  
+  // map your GPIO to an IRQ
+  LOG( "gpio_to_irq" );
+  irqNumber = gpio_to_irq( irqGPIO );
+  if( irqNumber < 0 )
+  {
+    printk( KERN_ERR "gpio_to_irq failed with code %d", result );
+    goto cleanup;
+  }
+  // requested interrupt
+  LOG( "request_irq" );
+  result = request_irq( irqNumber,
+                        raspicomm_irq_handler,
+                        IRQF_TRIGGER_RISING, // interrupt mode flag
+                        "rpc0Handler",        // used in /proc/interrupts
+                        NULL);               // the *dev_id shared interrupt lines, NULL is okay
+  if( result < 0 )
+  {
+    printk( KERN_ERR "request_irq failed with code %d", result );
+    goto cleanup;
+  }
 
   /* initialize the port */
+  LOG( "tty_port_init" );
   tty_port_init(&Port);
   Port.low_latency = 1;
 
   /* allocate the driver */
+  LOG( "tty_alloc_driver" );
   raspicommDriver = tty_alloc_driver(PORT_COUNT, TTY_DRIVER_REAL_RAW);
 
   /* return if allocation fails */
   if (IS_ERR(raspicommDriver))
-    return -ENOMEM;
-#else
-  /* allocate the driver */
-  raspicommDriver = alloc_tty_driver(PORT_COUNT);
-
-  /* return if allocation fails */
-  if (!raspicommDriver)
-    return -ENOMEM;
-#endif
+  {
+    printk( KERN_ERR "tty_alloc_driver failed" );
+    goto cleanup;
+  }
 
   // init the driver
   raspicommDriver->owner                 = THIS_MODULE;
@@ -335,25 +406,28 @@ static int __init raspicomm_init()
   raspicommDriver->init_termios.c_cflag  = B9600 | CREAD | CS8 | CLOCAL;
 
   // initialize function callbacks of tty_driver, necessary before tty_register_driver()
+  LOG( "tty_set_operations" );
   tty_set_operations(raspicommDriver, &raspicomm_ops);
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
   /* link the port with the driver */
+  LOG( "tty_port_link_device" );
   tty_port_link_device(&Port, raspicommDriver, 0);
-#endif
   
   // try to register the tty driver
+  LOG( "tty_register_driver" );
   if (tty_register_driver(raspicommDriver))
   {
-    LOG("tty_register_driver failed");
-    put_tty_driver(raspicommDriver);
-    return -1; // return if registration fails
+    printk( KERN_ERR "tty_register_driver failed" );
+    goto cleanup;
   }
 
-  LOG ("raspicomm_init() completed");
-
   /* successfully initialized the module */
+  LOG ("raspicomm_init() completed");
   return 0; 
+
+cleanup:
+  raspicomm_cleanup();
+  return -ENODEV;
 }
 
 // cleanup function that gets called when the module is unloaded
@@ -361,30 +435,24 @@ static void __exit raspicomm_exit()
 {
   LOG ("raspicomm_exit() called");
 
+  raspicomm_cleanup();
+#if 0 // +++--
   // unregister the driver
   if (tty_unregister_driver(raspicommDriver))
     LOG("tty_unregister_driver failed");
 
   put_tty_driver(raspicommDriver);
 
-#if 0 // +++--
-  // free mapped memory
-  raspicomm_spi0_deinit_mem(Spi0);
-#endif
-
   // free the irq
   raspicomm_spi0_deinit_irq();
 
-#if 0 // +++--
-  // free gpio
-  raspicomm_spi0_deinit_gpio();
-#endif
   if( spi_slave )
   {
     spi_unregister_device(spi_slave);
   }
 
   // log the unloading of the rs-485 module
+#endif
   LOG("kernel module exit");
 }
 
@@ -535,97 +603,11 @@ static int raspicomm_spi0_send(unsigned int mosi)
   return (tx[0] << 8) | tx[1];
 }
 
-#if 0 // +++--
-static int raspicomm_spi0_send(unsigned int mosi)
-{
-  // TODO direct pointer access should not be used -> use kernel functions iowriteX() instead see http://www.makelinux.net/ldd3/chp-9-sect-4
-  unsigned char v1,v2;
-  int status;
-
-  //LOG ("raspicomm_spi0_send(%X): %X spi0+1 %X spi0+2 %X", mosi, SPI0_CNTLSTAT, SPI0_FIFO, SPI0_CLKSPEED );
-
-  // Set up for single ended, MS comes out first
-  v1 = mosi >> 8;
-  v2 = mosi & 0x00FF;
-
-  // Enable SPI interface: Use CS 0 and set activate bit
-  SPI0_CNTLSTAT = SPI0_CS_CHIPSEL0 | SPI0_CS_ACTIVATE;
-
-  // Write the command into the FIFO
-  SPI0_FIFO = v1;
-  SPI0_FIFO = v2;
-
-  do {
-     status = SPI0_CNTLSTAT;
-  } while ( ((status & SPI0_CS_DONE) == 0) &&
-            ((status & SPI0_TA) == SPI0_TA) );
-  SPI0_CNTLSTAT = SPI0_CS_DONE; // clear the done bit
-
-  if (((status & SPI0_CS_DONE) == 0) && ((status & SPI0_TA) == 0))
-    LOG_INFO("spi transfer was not done, but transfer was not active anymore!");
-
-  // Data from the ADC chip should now be in the receiver
-  // read the received data
-  v1 = SPI0_FIFO;
-  v2 = SPI0_FIFO;
-
-  LOG( "raspicomm_spi0_send(%X) recv: %X", mosi, ( (v1<<8) | (v2) ) );
-  //if (use_backsleep)
-  //  udelay(SwBacksleep);
-
-  return ( (v1<<8) | (v2) );
-}
-
-// one time initialization for the spi0 
-static bool raspicomm_spi0_init(void)
-{
-  bool success;
-  // map the spi0 memory
-  Spi0 = raspicomm_spi0_init_mem();
-
-  // initialize the spi0
-  raspicomm_spi0_init_port();
-
-  // init the gpios
-  raspicomm_spi0_init_gpio();
-
-  // register the irq for the spi0
-  raspicomm_spi0_init_irq();
-
-  raspicomm_max3140_configure(9600, DATABITS_8, STOPBITS_ONE, PARITY_OFF);
-
-  success = raspicomm_max3140_apply_config();
-
-  if (!success)
-  {
-    // free mapped memory
-    raspicomm_spi0_deinit_mem(Spi0);
-    // free the irq
-    raspicomm_spi0_deinit_irq();
-    // free gpio
-    raspicomm_spi0_deinit_gpio();
-  }
-
-  return success;
-}
-
-// map the physical memory that we need for spi0 access
-volatile static unsigned int* raspicomm_spi0_init_mem(void)
-{
-  // in user space we would do mmap() call, in kernel space we do ioremap
-
-  // call ioremap to map the physical address to something we can use
-  unsigned int* p = ioremap(SPI0_BASE, 12);
-
-  LOG( "ioremap(%X) returned %X", SPI0_BASE, (int)p);
-  LOG( "spi0: %X spi0+1 %X spi0+2 %X", *p, *(p+1), *(p+2) );
-
-  return p;
-}
-#endif
-
 // irq handler, that gets fired when the gpio 17 falling edge occurs
-irqreturn_t raspicomm_irq_handler(int irq, void* dev_id)
+#if 0 // +++--
+static irqreturn_t raspicomm_irq_handler(unsigned int irq, void *dev_id, struct pt_regs *regs)
+#endif
+static irqreturn_t raspicomm_irq_handler(int irq, void* dev_id)
 {
   int rxdata, txdata;
 
@@ -674,81 +656,85 @@ irqreturn_t raspicomm_irq_handler(int irq, void* dev_id)
 }
 
 #if 0 // +++--
-// sets the specified gpio to the alternative function from the argument
-static void raspicomm_spi0_init_gpio_alt(int gpio, int alt)
+static int raspicomm_spi0_init_irq( int pin )
 {
-  volatile unsigned int* p;
-  int address;
+  int result = 0;
 
-  LOG("raspicomm_spi0_init_gpio_alt(gpio=%i, alt=%i) called", gpio, alt);
-
-  // calc the memory address for manipulating the gpio
-  address = GPIO_BASE + (4 * (gpio / 10) );
-
-  // map the gpio into kernel memory
-  p = ioremap(address, 4);
-
-  // if the mapping was successful
-  if (p != NULL) {
-
-    LOG("ioremap returned %X", (int)p );
-
-    // set the gpio to the alternative mapping
-    (*p) |= (((alt) <= 3 ? (alt) + 4 : (alt) == 4 ? 3 : 2) << (((gpio)%10)*3));
-
-    // free the gpio mapping again
-    iounmap(p);
+  // Request a GPIO pin from the driver
+  LOG( "gpio_request" );
+  result = gpio_request( pin, "rpc0irq" );
+  if( result < 0 )
+  {
+    printk( KERN_ERR " failed with code %d", result );
+    return -1;
   }
+  irqGPIO = pin;
+  // 'irqGPIO' is expected to be an unsigned int, i.e. the GPIO number
+  // Set GPIO as input
+  LOG( "gpio_direction_input" );
+  result = gpio_direction_input( irqGPIO );
+  if( result < 0 )
+  {
+    printk( KERN_ERR " failed with code %d", result );
+    return -1;
+  }
+#if 0 // +++ should we set this to 0?
+  // Set a 50ms debounce, adjust to your needs
+  result = gpio_set_debounce( irqGPIO, 50 );
+  if( result < 0 )
+  {
+    printk( KERN_ERR " failed with code %d", result );
+    return -1;
+  }
+#endif
+#if 0 // +++--
+  // The GPIO will appear in /sys/class/gpio
+  result = gpio_export( irqGPIO );
+  if( result < 0 )
+  {
+    printk( KERN_ERR " failed with code %d", result );
+    return -1;
+  }
+#endif
+  
+  // map your GPIO to an IRQ
+  LOG( "gpio_to_irq" );
+  irqNumber = gpio_to_irq( irqGPIO );
+  if( irqNumber < 0 )
+  {
+    printk( KERN_ERR " failed with code %d", result );
+    return -1;
+  }
+  // requested interrupt
+  LOG( "request_irq" );
+  result = request_irq( irqNumber,
+                        raspicomm_irq_handler,
+                        IRQF_TRIGGER_RISING, // interrupt mode flag
+                        "rpc0Handler",        // used in /proc/interrupts
+                        NULL);               // the *dev_id shared interrupt lines, NULL is okay
+  if( result < 0 )
+  {
+    printk( KERN_ERR " failed with code %d", result );
+    return -1;
+  }
+  return 0;
 }
 
-// init the gpios as specified in 
-static int raspicomm_spi0_init_gpio()
+static void raspicomm_spi0_deinit_irq()
 {
-  int i, length = sizeof(GpioConfigs) / sizeof(gpioconfig), ret = SUCCESS;
-
-  LOG ( "raspicomm_spi0_init_gpio() called with %i gpios", length );
-
-  for (i = 0; i < length; i++)
+  // Free the IRQ number, no *dev_id required in this case
+  if( irqNumber >= 0 )
   {
-    if ( gpio_request_one( GpioConfigs[i].gpio, GPIOF_IN, "SPI" ) == 0 )
-    {
-      GpioConfigs[i].gpio_requested = GpioConfigs[i].gpio; // mark the gpio as successfully requested
-
-      LOG ( "gpio_request_one(%i) succeeded", GpioConfigs[i].gpio);
-
-      // set the alternative function according      
-      raspicomm_spi0_init_gpio_alt( GpioConfigs[i].gpio, GpioConfigs[i].gpio_alternative );
-    }
-    else {
-      printk( KERN_ERR "raspicomm: gpio_request_one(%i) failed", GpioConfigs[i].gpio );
-      ret--;
-    }
+    free_irq( irqNumber, NULL );
   }
-
-  return ret;
-}
-
-static void raspicomm_spi0_deinit_gpio()
-{
-  int i, length = sizeof(GpioConfigs) / sizeof(gpioconfig);
- 
-  LOG( "raspicomm_spi0_deinit_gpio() called" );
-
-  // frees all gpios that we successfully requested  
-  for (i = 0; i < length; i++)
+  if( irqGPIO >= 0 )
   {
-    if ( GpioConfigs[i].gpio_requested ) 
-    {
-      LOG( "Freeing gpio %i", GpioConfigs[i].gpio_requested );
-
-      gpio_free( GpioConfigs[i].gpio_requested );
-      GpioConfigs[i].gpio_requested = 0;
-
-    }
+    gpio_free( irqGPIO );
   }
 }
 #endif
 
+#if 0 // +++--
 static int raspicomm_spi0_init_irq()
 {  
   // the interrupt number and gpio number
@@ -820,28 +806,6 @@ static void raspicomm_spi0_deinit_irq()
   }
 
 }
-
-#if 0 // +++--
-// initializes the spi0 using the memory region Spi0
-static void raspicomm_spi0_init_port()
-{
-  // 1 MHz spi clock
-  //SPI0_CLKSPEED = 250 / 1;
-  SPI0_CLKSPEED = 80;
-
-  // clear FIFOs and all status bits
-  SPI0_CNTLSTAT = SPI0_CS_CLRALL;
-
-  SPI0_CNTLSTAT = SPI0_CS_DONE; // make sure done bit is cleared
-}
-
-// frees the memory are used to access the spi0
-static void raspicomm_spi0_deinit_mem(volatile unsigned int* spi0)
-{
-  // after using the device call iounmap to return the address space to the kernel
-  if (spi0 != NULL)
-    iounmap(spi0);
-}
 #endif
 
 // this function pushes a received character to the opened tty device, called by the interrupt function
@@ -849,7 +813,6 @@ static void raspicomm_rs485_received(struct tty_struct* tty, char c)
 {
   LOG( "raspicomm_rs485_received(c=%c)", c);
 
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
   if (tty != NULL && tty->port != NULL)
   {
     // send the character to the tty
@@ -858,17 +821,6 @@ static void raspicomm_rs485_received(struct tty_struct* tty, char c)
     // tell it to flip the buffer
     tty_flip_buffer_push(tty->port);
   }
-#else
-  if (tty != NULL)
-  {
-    // send the character to the tty
-    tty_insert_flip_char(tty, c, TTY_NORMAL);
-
-    // tell it to flip the buffer
-    tty_flip_buffer_push(tty);
-  }
-#endif
-
 }
 
 // ****************************************************************************
@@ -976,11 +928,7 @@ static void raspicommDriver_set_termios(struct tty_struct* tty, struct ktermios*
   baudrate = tty_get_baud_rate(tty);
 
   // get the cflag
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(3,10,0)
   cflag = tty->termios.c_cflag;
-#else
-  cflag = tty->termios->c_cflag;
-#endif
 
   // get the databits
   switch ( cflag & CSIZE )
