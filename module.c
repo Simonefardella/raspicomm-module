@@ -75,6 +75,7 @@ typedef enum {
     MAX3140_UART_B1     = 1 << 1,
     MAX3140_UART_B0     = 1 << 0,
 
+    MAX3140_PARITY_BIT_INDEX    = 8,
     MAX3140_wd_Pt = 1 << 8    
 
 } MAX3140_UartFlags;
@@ -179,8 +180,8 @@ static struct tty_port Port;
 // the number of open() calls
 static int OpenCount;
 
-// ParityIsEven == true ? even : odd
-static int ParityIsEven;
+// ParityIsOdd == true ? odd : even
+static int ParityIsOdd;
 static int ParityEnabled;
 
 // currently opened tty device
@@ -273,7 +274,7 @@ static int __init raspicomm_init( void )
     raspicommDriver = NULL;
     memset( &Port, 0, sizeof(Port) );
     OpenCount = 0;
-    ParityIsEven = 1;
+    ParityIsOdd = 0;
     ParityEnabled = 0;
     OpenTTY = NULL;
     memset( &TxQueue, 0, sizeof(TxQueue) );
@@ -487,6 +488,27 @@ static bool raspicomm_max3140_apply_config()
 
 // Uncommented by javicient
 
+static int raspicomm_max3140_get_parity_flag( int n )
+{
+    if( ParityEnabled )
+    {
+        // put the xor of the lowest 8 bits into bit 0 of n
+        n ^= (n >> 4);
+        n ^= (n >> 2);
+        n ^= (n >> 1);
+        n &= 1;
+        // now 0 = even number of one bits, 1 = odd
+        // add parity config
+        n ^= ParityIsOdd;
+        return n << MAX3140_PARITY_BIT_INDEX;
+    }
+    else
+    {
+        return 0;
+    }
+}
+
+#if 0 // +++--
 static int raspicomm_max3140_get_parity_flag( char c )
 {
     // even parity: is 1 if number of ones is odd
@@ -515,7 +537,8 @@ static int raspicomm_max3140_get_parity_flag( char c )
      LOG( "raspicomm_max3140_get_parity_flag(c=%c) parityEven=%i, count=%i, ret=%i", c, parityEven, count, ret );
 
      return ret;
- }
+}
+#endif
 
 static void raspicomm_start_transfer()
 {
@@ -799,7 +822,7 @@ static void raspicommDriver_set_termios( struct tty_struct* tty,
     if( cflag & PARENB ) 
     {
         // is it even or odd? store it for sending
-        ParityIsEven = !( cflag & PARODD ); 
+        ParityIsOdd = !!( cflag & PARODD ); 
         parity = PARITY_ON;
         ParityEnabled = 1;
     }
