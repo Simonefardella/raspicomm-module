@@ -310,24 +310,6 @@ static int __init raspicomm_init()
     printk( KERN_ERR "gpio_direction_input failed with code %d", result );
     goto cleanup;
   }
-#if 0 // +++ should we set this to 0?
-  // Set a 50ms debounce, adjust to your needs
-  result = gpio_set_debounce( irqGPIO, 50 );
-  if( result < 0 )
-  {
-    printk( KERN_ERR "gpio_set_debounce failed with code %d", result );
-    goto cleanup;
-  }
-#endif
-#if 0 // +++--
-  // The GPIO will appear in /sys/class/gpio
-  result = gpio_export( irqGPIO );
-  if( result < 0 )
-  {
-    printk( KERN_ERR "gpio_export failed with code %d", result );
-    goto cleanup;
-  }
-#endif
   
   // map your GPIO to an IRQ
   LOG( "gpio_to_irq" );
