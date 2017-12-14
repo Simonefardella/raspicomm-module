@@ -108,14 +108,6 @@ static int           raspicomm_spi0_send(unsigned int mosi);
 static void          raspicomm_rs485_received(struct tty_struct* tty, char c);
 
 static irqreturn_t   raspicomm_irq_handler(int irq, void* dev_id);
-#if 0 // +++--
-static irqreturn_t raspicomm_irq_handler(unsigned int irq, void *dev_id, struct pt_regs *regs);
-#endif
-
-#if 0 // +++--
-static int                    raspicomm_spi0_init_irq( int pin );
-static void                   raspicomm_spi0_deinit_irq(void);
-#endif
 
 // ****************************************************************************
 // *** END raspicomm private functions ****
@@ -203,15 +195,6 @@ static struct spi_device *spi_slave;
 
 static unsigned int irqGPIO;
 static unsigned int irqNumber;
-
-#if 0 // +++--
-// The requested gpio (set by raspicomm_spi0_init_gpio and freed by raspicomm_spi0_deinit_gpio)
-static int Gpio;
-
-// The interrupt that signals when data is available
-static int Gpio17_Irq;
-#endif
-
 
 // ****************************************************************************
 // **** END raspicomm private fields
@@ -308,14 +291,6 @@ static int __init raspicomm_init()
     printk( KERN_ERR "spi_new_device failed");
     goto cleanup;
   }
-#if 0 // +++--
-  LOG( "raspicomm_spi0_init_irq" );
-  if( !raspicomm_spi0_init_irq( 17 ) )
-  {
-    printk( KERN_ERR "raspicomm_spi0_init_irq failed");
-    goto 
-  }
-#endif
 
   // Request a GPIO pin from the driver
   LOG( "gpio_request" );
@@ -434,25 +409,7 @@ cleanup:
 static void __exit raspicomm_exit()
 {
   LOG ("raspicomm_exit() called");
-
   raspicomm_cleanup();
-#if 0 // +++--
-  // unregister the driver
-  if (tty_unregister_driver(raspicommDriver))
-    LOG("tty_unregister_driver failed");
-
-  put_tty_driver(raspicommDriver);
-
-  // free the irq
-  raspicomm_spi0_deinit_irq();
-
-  if( spi_slave )
-  {
-    spi_unregister_device(spi_slave);
-  }
-
-  // log the unloading of the rs-485 module
-#endif
   LOG("kernel module exit");
 }
 
@@ -604,9 +561,6 @@ static int raspicomm_spi0_send(unsigned int mosi)
 }
 
 // irq handler, that gets fired when the gpio 17 falling edge occurs
-#if 0 // +++--
-static irqreturn_t raspicomm_irq_handler(unsigned int irq, void *dev_id, struct pt_regs *regs)
-#endif
 static irqreturn_t raspicomm_irq_handler(int irq, void* dev_id)
 {
   int rxdata, txdata;
@@ -654,159 +608,6 @@ static irqreturn_t raspicomm_irq_handler(int irq, void* dev_id)
 
   return IRQ_HANDLED;
 }
-
-#if 0 // +++--
-static int raspicomm_spi0_init_irq( int pin )
-{
-  int result = 0;
-
-  // Request a GPIO pin from the driver
-  LOG( "gpio_request" );
-  result = gpio_request( pin, "rpc0irq" );
-  if( result < 0 )
-  {
-    printk( KERN_ERR " failed with code %d", result );
-    return -1;
-  }
-  irqGPIO = pin;
-  // 'irqGPIO' is expected to be an unsigned int, i.e. the GPIO number
-  // Set GPIO as input
-  LOG( "gpio_direction_input" );
-  result = gpio_direction_input( irqGPIO );
-  if( result < 0 )
-  {
-    printk( KERN_ERR " failed with code %d", result );
-    return -1;
-  }
-#if 0 // +++ should we set this to 0?
-  // Set a 50ms debounce, adjust to your needs
-  result = gpio_set_debounce( irqGPIO, 50 );
-  if( result < 0 )
-  {
-    printk( KERN_ERR " failed with code %d", result );
-    return -1;
-  }
-#endif
-#if 0 // +++--
-  // The GPIO will appear in /sys/class/gpio
-  result = gpio_export( irqGPIO );
-  if( result < 0 )
-  {
-    printk( KERN_ERR " failed with code %d", result );
-    return -1;
-  }
-#endif
-  
-  // map your GPIO to an IRQ
-  LOG( "gpio_to_irq" );
-  irqNumber = gpio_to_irq( irqGPIO );
-  if( irqNumber < 0 )
-  {
-    printk( KERN_ERR " failed with code %d", result );
-    return -1;
-  }
-  // requested interrupt
-  LOG( "request_irq" );
-  result = request_irq( irqNumber,
-                        raspicomm_irq_handler,
-                        IRQF_TRIGGER_RISING, // interrupt mode flag
-                        "rpc0Handler",        // used in /proc/interrupts
-                        NULL);               // the *dev_id shared interrupt lines, NULL is okay
-  if( result < 0 )
-  {
-    printk( KERN_ERR " failed with code %d", result );
-    return -1;
-  }
-  return 0;
-}
-
-static void raspicomm_spi0_deinit_irq()
-{
-  // Free the IRQ number, no *dev_id required in this case
-  if( irqNumber >= 0 )
-  {
-    free_irq( irqNumber, NULL );
-  }
-  if( irqGPIO >= 0 )
-  {
-    gpio_free( irqGPIO );
-  }
-}
-#endif
-
-#if 0 // +++--
-static int raspicomm_spi0_init_irq()
-{  
-  // the interrupt number and gpio number
-  int irq, io = 17;
-
-  // request the gpio and configure it as an input
-  int err = gpio_request_one(io, GPIOF_IN, "SPI0");
-
-  if (err) {
-    printk( KERN_ERR "raspicomm: gpio_request_one(%i) failed with error=%i", io, err );
-    return -1;
-  } 
-
-  // store the requested gpio so that it can be freed later on
-  Gpio = io;
-
-  // map it to an irq
-  irq = gpio_to_irq(io);
-
-  if (irq < 0) {
-    printk( KERN_ERR "raspicomm: gpio_to_irq failed with error=%i", irq );
-    return -1;
-  }
-
-  // store the irq so that it can be freed later on
-  Gpio17_Irq = irq;
-
-  // request the interrupt
-  err = request_irq(irq,                           // the irq we want to receive
-                    raspicomm_irq_handler,         // our irq handler function
-                    IRQF_TRIGGER_FALLING,          // irq is triggered on the falling edge
-                    IRQ_DEV_NAME,                  // device name that is displayed in /proc/interrupts
-                    (void*)(raspicomm_irq_handler) // a unique id, needed to free the irq
-                   );
-
-  if (err) {
-    printk( KERN_ERR "raspicomm: request_irq(%i) failed with error=%i", irq, err);
-    return -1;
-  }
-
-  LOG ( "raspicomm_spi0_init_irq completed successfully");
-
-  return SUCCESS;
-}
-
-static void raspicomm_spi0_deinit_irq()
-{
-  int gpio = Gpio;
-  int irq = Gpio17_Irq;
-
-  // if we've got a valid irq, free it
-  if (irq > 0)  {
-
-    // disable the irq first
-    LOG( "Disabling irq ");
-    disable_irq(irq);
-
-    // free the irq
-    LOG( "Freeing irq" );
-    free_irq(irq, (void*)(raspicomm_irq_handler));
-    Gpio17_Irq = 0;
-  }
-
-  // if we've got a valid gpio, free it
-  if (gpio > 0) {
-    LOG ( "Freeing gpio" );
-    gpio_free(gpio);
-    Gpio = 0;
-  }
-
-}
-#endif
 
 // this function pushes a received character to the opened tty device, called by the interrupt function
 static void raspicomm_rs485_received(struct tty_struct* tty, char c)
