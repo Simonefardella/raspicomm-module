@@ -170,7 +170,6 @@ static int raspicommDriver_ioctl( struct tty_struct* tty,
                 unsigned int cmd, unsigned int long arg );
 static void raspicommDriver_throttle( struct tty_struct * tty );
 static void raspicommDriver_unthrottle( struct tty_struct * tty );
-static void raspicomm_start_transfer( void );
 
 // ****************************************************************************
 // **** END raspicommDriver functions ****
@@ -736,32 +735,6 @@ static int max3140_make_write_data_cmd( int data )
     return data;
 }
 
-static void raspicomm_start_transfer()
-{
-    int data, rc;
-
-    if( SpiConfig & MAX3140_UART_TM )
-    {
-        LOG( "raspicomm_start_transfer: already transmitting" );
-        return;
-    }
-    spin_lock_bh( &dev_lock );
-    rc = queue_dequeue( &TxQueue, &data );
-    if( rc )
-    {
-        data = max3140_make_write_data_cmd( data );
-        SpiConfig = SpiConfig | MAX3140_WRITE_CONFIG | MAX3140_UART_TM;
-        rpc_spi_msg2_async( &start_transmitting, data, SpiConfig );
-    }
-    else
-    {
-        // have no data to send!?!
-        LOG( "raspicomm_start_transfer has no data to send!" );
-        return;
-    }
-    spin_unlock_bh( &dev_lock ); 
-}
-
 static int raspicomm_spi0_send( unsigned int tx )
 {
     unsigned char txbuf[2], rxbuf[2];
@@ -904,51 +877,67 @@ static void raspicommDriver_close( struct tty_struct* tty, struct file* file )
 static int raspicommDriver_write( struct tty_struct* tty,
     const unsigned char* buf, int count )
 {
-    int bytes_written = 0;
     int rc;
+    int data;
 
     LOG( "raspicommDriver_write(count=%i)", count );
-    spin_lock_bh( &dev_lock );
-    rc = SpiConfig;
-    spin_unlock_bh( &dev_lock ); 
-    if( rc & MAX3140_STOP_COMMUNICATION )
+    if( count <= 0 )
     {
-        // ++++ what errors are allowed to be returned here?
         return 0;
     }
-
-    while( bytes_written < count )
+    spin_lock_bh( &dev_lock );
+    if( SpiConfig & MAX3140_STOP_COMMUNICATION )
     {
-        spin_lock_bh( &dev_lock );
-        rc = queue_enqueue( &TxQueue, buf[bytes_written] );
-        spin_unlock_bh( &dev_lock ); 
-        if( rc )
-        {
-            bytes_written++;
-        }
-        else
-        {
-            // kein Platz mehr vorhanden --> schlafen, senden
-            // +++ (mf) can't i just return bytes_written here?
-            cpu_relax();
-
-            raspicomm_start_transfer();
-        } 
+        // this device is gone
+        rc = -ENODEV;
     }
-    LOG( "starting transfer" );
-    // AHB Sorge dafür, dass der TBE interrupt auf jeden Fall aktiviert wird
-    // (falls nicht bereits oben bei Platzmangel)
-    raspicomm_start_transfer();
-    LOG( "unlocking" );
-    LOG( "raspicommDriver_write done" );
-
-    return bytes_written;
+    else
+    {
+        rc = 0;
+        if( !(SpiConfig & MAX3140_UART_TM) )
+        {
+            // no transfer in progress or it is sending the last byte
+            LOG( "starting transfer" );
+            // send the first byte
+            data = max3140_make_write_data_cmd( buf[0] );
+            SpiConfig |= MAX3140_WRITE_CONFIG | MAX3140_UART_TM;
+            rpc_spi_msg2_async( &start_transmitting, data, SpiConfig );
+            rc++;
+            // cancel a pending EOT
+            hrtimer_cancel( &last_byte_sent_timer );
+        }
+        // add the remaining bytes to the queue, stop if it is full
+        while( rc < count )
+        {
+            if( !queue_enqueue( &TxQueue, buf[rc] ) )
+            {
+                // queue full
+                break;
+            }
+            rc++;
+        }
+    }
+    spin_unlock_bh( &dev_lock ); 
+    LOG( "raspicommDriver_write: %d", rc );
+    return rc;
 }
 
 // called by kernel to evaluate how many bytes can be written
 static int raspicommDriver_write_room( struct tty_struct *tty )
 {
-    return INT_MAX;
+    int rc;
+
+    spin_lock_bh( &dev_lock );
+    if( SpiConfig & MAX3140_STOP_COMMUNICATION )
+    {
+        rc = 0;
+    }
+    else
+    {
+        rc = queue_get_room( &TxQueue );
+    }
+    spin_unlock_bh( &dev_lock ); 
+    return rc;
 }
 
 static void raspicommDriver_flush_buffer( struct tty_struct * tty )
@@ -958,8 +947,12 @@ static void raspicommDriver_flush_buffer( struct tty_struct * tty )
 
 static int raspicommDriver_chars_in_buffer( struct tty_struct * tty )
 {
-    //LOG("raspicommDriver_chars_in_buffer called");
-    return 0;
+    int rc;
+
+    spin_lock_bh( &dev_lock );
+    rc = QUEUE_SIZE - 1 - queue_get_room( &TxQueue );
+    spin_unlock_bh( &dev_lock ); 
+    return rc;
 }
 
 // called by the kernel when cfsetattr() is called from userspace
@@ -967,7 +960,10 @@ static void raspicommDriver_set_termios( struct tty_struct* tty,
                 struct ktermios* kt )
 {
     int cflag;
-    speed_t baudrate; Databits databits; Parity parity; Stopbits stopbits;
+    speed_t baudrate;
+    Databits databits;
+    Parity parity;
+    Stopbits stopbits;
 
     LOG( "raspicommDriver_set_termios() called" );
 
