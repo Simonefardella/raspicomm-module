@@ -25,6 +25,9 @@
 #include <linux/version.h>        
 #include <linux/spi/spi.h>
 #include <linux/string.h>
+#include <linux/hrtimer.h>
+// for hrtimer
+#include <linux/ktime.h>
 #define DEBUG
 #include "module.h"
 // needed for queue_xxx functions
@@ -85,6 +88,28 @@ typedef enum {
 #define MAX3140_READ_DATA ( 0 )
 #define MAX3140_WRITE_DATA ( MAX3140_UART_R )
 
+
+typedef struct {
+    struct spi_message msg;
+    struct spi_transfer xfer;
+    char tx_buf[2];
+    char rx_buf[2];
+    const char* name;
+} rpc_spi_msg_t;
+
+typedef struct {
+    struct spi_transfer xfer;
+    char tx_buf[2];
+    char rx_buf[2];
+} rpc_spi_xfer_buf_t;
+
+typedef struct {
+    struct spi_message msg;
+    rpc_spi_xfer_buf_t x1;
+    rpc_spi_xfer_buf_t x2;
+    const char* name;
+} rpc_spi_msg2_t;
+
 // funny that this function is not standard
 static inline int spi_transceive( struct spi_device *spi,
                 void *tx_buf, void *rx_buf, size_t len )
@@ -105,7 +130,7 @@ static inline int spi_transceive( struct spi_device *spi,
 static int __init raspicomm_init( void );
 static void __exit raspicomm_exit( void );
 
-static int raspicomm_max3140_get_swbacksleep(speed_t speed );
+static ktime_t raspicomm_max3140_get_swbacksleep( speed_t speed );
 static unsigned char raspicomm_max3140_get_baudrate_index( speed_t speed );
 static unsigned int raspicomm_max3140_get_uart_config( speed_t speed, 
                 Databits databits, Stopbits stopbits, Parity parity );
@@ -115,6 +140,7 @@ static bool raspicomm_max3140_apply_config( void );
 static int raspicomm_spi0_send( unsigned int mosi );
 static void raspicomm_rs485_received( struct tty_struct* tty, char c );
 static irqreturn_t raspicomm_irq_handler( int irq, void* dev_id );
+static int raspicomm_max3140_get_parity_flag( int n );
 
 // ****************************************************************************
 // *** END raspicomm private functions ****
@@ -143,7 +169,6 @@ static int raspicommDriver_ioctl( struct tty_struct* tty,
 static void raspicommDriver_throttle( struct tty_struct * tty );
 static void raspicommDriver_unthrottle( struct tty_struct * tty );
 static void raspicomm_start_transfer( void );
-static void raspicomm_tasklet_func( unsigned long arg );
 
 // ****************************************************************************
 // **** END raspicommDriver functions ****
@@ -192,7 +217,8 @@ static struct tty_struct* OpenTTY = NULL;
 static queue_t TxQueue;
 
 // variable used in the delay to simulate the baudrate
-static int SwBacksleep;
+// static int SwBacksleep;
+static ktime_t SwBacksleep;
 
 // config setting of the spi0
 static int SpiConfig;
@@ -202,12 +228,179 @@ static struct spi_device *spi_slave;
 static unsigned int irqGPIO;
 static unsigned int irqNumber;
 
-DECLARE_TASKLET( raspicomm_tasklet, raspicomm_tasklet_func, 0 );
+static rpc_spi_msg2_t start_transmitting;
+static rpc_spi_msg_t irq_msg_read;
+static rpc_spi_msg_t irq_msg_write;
+static rpc_spi_msg_t stop_transmitting;
+static struct hrtimer last_byte_sent_timer;
 
 // ****************************************************************************
 // **** END raspicomm private fields
 // ****************************************************************************
 
+static void rpc_spi_msg_init( rpc_spi_msg_t* msg,
+            void (*complete)(void*), const char* name )
+{
+    memset( msg, 0, sizeof(*msg) );
+    spi_message_init_no_memset( &msg->msg );
+    spi_message_add_tail( &msg->xfer, &msg->msg );
+    msg->msg.spi = spi_slave;
+    msg->msg.complete = complete;
+    msg->msg.context = msg;
+    msg->xfer.tx_buf = msg->tx_buf;
+    msg->xfer.rx_buf = msg->rx_buf;
+    msg->xfer.len = 2;
+    msg->name = name;
+}
+
+static void rpc_spi_msg2_init( rpc_spi_msg2_t* msg,
+            void (*complete)(void*), const char* name )
+{
+    memset( msg, 0, sizeof(*msg) );
+    LOG( "spi_message_init_no_memset %p %p", msg, &msg->msg );
+    spi_message_init_no_memset( &msg->msg );
+    LOG( "spi_message_add_tail" );
+    spi_message_add_tail( &msg->x1.xfer, &msg->msg );
+    LOG( "spi_message_add_tail" );
+    spi_message_add_tail( &msg->x2.xfer, &msg->msg );
+    LOG( "remaining fields" );
+    msg->msg.spi = spi_slave;
+    msg->msg.complete = complete;
+    msg->msg.context = msg;
+    msg->x1.xfer.tx_buf = msg->x1.tx_buf;
+    msg->x1.xfer.rx_buf = msg->x1.rx_buf;
+    msg->x1.xfer.len = 2;
+    msg->x1.xfer.cs_change = 1;
+    msg->x2.xfer.tx_buf = msg->x2.tx_buf;
+    msg->x2.xfer.rx_buf = msg->x2.rx_buf;
+    msg->x2.xfer.len = 2;
+    msg->name = name;
+    LOG( "done" );
+}
+
+static int rpc_spi_msg_async( rpc_spi_msg_t* msg, unsigned int tx )
+{
+    int rc;
+
+    msg->tx_buf[0] = tx >> 8;
+    msg->tx_buf[1] = tx;
+    rc = spi_async( msg->msg.spi, &msg->msg );
+    LOG( "rpc_spi_msg_async(%s,%04X) = %d", msg->name, tx, rc );
+    return rc;
+}
+
+static int rpc_spi_msg2_async( rpc_spi_msg2_t* msg,
+            unsigned int tx1, unsigned int tx2 )
+{
+    int rc;
+
+    msg->x1.tx_buf[0] = tx1 >> 8;
+    msg->x1.tx_buf[1] = tx1;
+    msg->x2.tx_buf[0] = tx2 >> 8;
+    msg->x2.tx_buf[1] = tx2;
+    rc = spi_async( msg->msg.spi, &msg->msg );
+    LOG( "rpc_spi_msg2_async(%s,%04X,%04X) = %d", msg->name, tx1, tx2, rc );
+    return rc;
+}
+
+static unsigned int rpc_spi_msg_rx( void* context )
+{
+    rpc_spi_msg_t* msg = context;
+    unsigned int rc = (msg->rx_buf[0] << 8) | msg->rx_buf[1];
+    LOG( "spi_msg_rx(%s) = %04X", msg->name, rc );
+    return rc;
+}
+
+static void rpc_spi_msg2_rx( void* context, unsigned int* prx1, unsigned int* prx2 )
+{
+    rpc_spi_msg2_t* msg = context;
+    unsigned int rx1 = (msg->x1.rx_buf[0] << 8) | msg->x1.rx_buf[1];
+    unsigned int rx2 = (msg->x2.rx_buf[0] << 8) | msg->x2.rx_buf[1];
+    LOG( "spi_msg_rx(%s) = %04X,%04X", msg->name, rx1, rx2 );
+    if( prx1 ) *prx1 = rx1;
+    if( prx2 ) *prx2 = rx2;
+}
+
+
+static void start_transmitting_done( void* context )
+{
+    int rxdata;
+
+    LOG( "start_transmitting_done" );
+    rpc_spi_msg2_rx( context, &rxdata, NULL );
+    if( rxdata & MAX3140_UART_R )
+    {
+        // data is available in the receive register
+        // handle the received data
+        raspicomm_rs485_received( OpenTTY, rxdata & 0x00FF );
+        LOG( "irq_msg_read_done recv: 0x%X", rxdata );
+    }
+}
+
+static void irq_msg_read_done( void* context )
+{
+    int rxdata, txdata, rc;
+
+    LOG( "" );
+    rxdata = rpc_spi_msg_rx( context );
+    if( rxdata & MAX3140_UART_R )
+    {
+        // data is available in the receive register
+        // handle the received data
+        raspicomm_rs485_received( OpenTTY, rxdata & 0x00FF );
+        LOG( "irq_msg_read_done recv: 0x%X", rxdata );
+    }
+    if( (rxdata & MAX3140_UART_T) == 0 )
+    {
+        // nothing to send
+        return;
+    }
+    spin_lock_bh( &dev_lock );
+    rc = queue_dequeue( &TxQueue, &txdata );
+    if( rc )
+    {
+        txdata |= MAX3140_WRITE_DATA | raspicomm_max3140_get_parity_flag( txdata );
+    }
+    else
+    {
+        SpiConfig &= ~MAX3140_UART_TM;
+        txdata = SpiConfig;
+    }
+    spin_unlock_bh( &dev_lock ); 
+    rpc_spi_msg_async( &irq_msg_write, txdata );
+    if( !rc )
+    {
+        // after the last byte has been sent the transmission is finished
+        LOG( "start HR timer last_byte_sent_timer" );
+        hrtimer_start( &last_byte_sent_timer, SwBacksleep, HRTIMER_MODE_REL );
+    }
+}
+
+static void irq_msg_write_done( void* context )
+{
+    LOG( "irq_msg_write_done" );
+    // nothing to do here
+}
+
+static enum hrtimer_restart last_byte_sent( struct hrtimer *timer )
+{
+    int txdata = MAX3140_WRITE_DATA_R | MAX3140_WRITE_DATA_RTS | MAX3140_WRITE_DATA_TE;
+    LOG( "last_byte_sent" );
+    rpc_spi_msg_async( &stop_transmitting, txdata );
+    return HRTIMER_NORESTART;
+}
+
+static void stop_transmitting_done( void* context )
+{
+    LOG( "stop_transmitting_done" );
+    // nothing to do here
+}
+/*
+static void _done( void* context )
+{
+    LOG( "" );
+}
+*/
 
 // ****************************************************************************
 // **** START module specific functions ****
@@ -281,7 +474,7 @@ static int __init raspicomm_init( void )
     ParityEnabled = 0;
     OpenTTY = NULL;
     memset( &TxQueue, 0, sizeof(TxQueue) );
-    SwBacksleep = 0;
+    SwBacksleep = raspicomm_max3140_get_swbacksleep( 9600 );
     SpiConfig = 0;
     spi_slave = NULL;
     irqGPIO = -EINVAL;
@@ -391,6 +584,20 @@ static int __init raspicomm_init( void )
         goto cleanup;
     }
 
+    LOG( "rpc_spi_msg2_init start_transmitting" );
+    rpc_spi_msg2_init( &start_transmitting, start_transmitting_done,
+            "start_transmitting" );
+    LOG( "rpc_spi_msg_init irq_msg_read" );
+    rpc_spi_msg_init( &irq_msg_read, irq_msg_read_done, "irq_msg_read" );
+    LOG( "rpc_spi_msg_init irq_msg_write" );
+    rpc_spi_msg_init( &irq_msg_write, irq_msg_write_done, "irq_msg_write" );
+    LOG( "rpc_spi_msg_init stop_transmitting" );
+    rpc_spi_msg_init( &stop_transmitting, stop_transmitting_done,
+            "stop_transmitting" );
+    LOG( "hrtimer_init last_byte_sent_timer" );
+    hrtimer_init( &last_byte_sent_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL );
+    last_byte_sent_timer.function = &last_byte_sent;
+
     // successfully initialized the module
     LOG( "raspicomm_init() completed" );
     return 0; 
@@ -444,23 +651,26 @@ static unsigned int raspicomm_max3140_get_uart_config( speed_t speed,
     return value;
 }
 
-static int raspicomm_max3140_get_swbacksleep( speed_t speed )
+static ktime_t raspicomm_max3140_get_swbacksleep( speed_t speed )
 {
-    return 10000000 / speed;
+    // +++++ parity and number of bits have to be added to this calculation too
+    // return 10000000 / speed;
+    int bit_count = 11;
+    return ktime_set( 0, (NSEC_PER_SEC / speed) * bit_count );
 }
 
 static void raspicomm_max3140_configure( speed_t speed,
                 Databits databits, Stopbits stopbits, Parity parity )
 {
-    int swBacksleep = raspicomm_max3140_get_swbacksleep( speed );
+    ktime_t swBacksleep = raspicomm_max3140_get_swbacksleep( speed );
     int config = raspicomm_max3140_get_uart_config( speed, databits,
                     stopbits, parity );
 
     LOG( "raspicomm_max3140_configure() called "
         "speed=%i, databits=%i, stopbits=%i, parity=%i "
-        "=> config: %X, swBacksleep: %i",
+        "=> config: %X, swBacksleep: %d",
         speed, databits, stopbits, parity,
-        config, swBacksleep );
+        config, (int)ktime_to_us(swBacksleep) );
 
     SpiConfig = config;
     SwBacksleep = swBacksleep;
@@ -511,45 +721,30 @@ static int raspicomm_max3140_get_parity_flag( int n )
     }
 }
 
-// dev_lock mustbe locked before calling this function
 static void raspicomm_start_transfer()
 {
-    int rxdata, txdata;
+    int data, rc;
 
-    // TBE-interrupt enable, falls das noch nicht erledigt ist
     if( SpiConfig & MAX3140_UART_TM )
     {
-        // bereits eingeschaltet --> nichts mehr tun,
-        // der TBE-IR sorgt schon irgendwann für ein Leeren der Queue
-        rxdata = 0;
         LOG( "raspicomm_start_transfer: already transmitting" );
+        return;
+    }
+    spin_lock_bh( &dev_lock );
+    rc = queue_dequeue( &TxQueue, &data );
+    if( rc )
+    {
+        data = MAX3140_WRITE_DATA | data | raspicomm_max3140_get_parity_flag( data);
+        SpiConfig = SpiConfig | MAX3140_WRITE_CONFIG | MAX3140_UART_TM;
+        rpc_spi_msg2_async( &start_transmitting, data, SpiConfig );
     }
     else
     {
-        // noch nicht eingeschaltet --> jetzt einschalten
-        SpiConfig = SpiConfig | MAX3140_WRITE_CONFIG | MAX3140_UART_TM;
-        rxdata = raspicomm_spi0_send( SpiConfig );
-    tasklet_schedule( &raspicomm_tasklet );
+        // have no data to send!?!
+        LOG( "raspicomm_start_transfer has no data to send!" );
+        return;
     }
-
-#if 0
-    if( rxdata & MAX3140_UART_T )
-    {
-        // TBE --> senden möglich
-        if( queue_dequeue( &TxQueue, &txdata ) )
-        {
-            // Byte zum Senden da --> gleich erledigen
-            // send the data (RTS enabled) AHB rxdata für Log
-            rxdata = raspicomm_spi0_send( MAX3140_WRITE_DATA | txdata | raspicomm_max3140_get_parity_flag( (char)txdata) );
-            // AHB
-            LOG( "raspicomm_start_transfer: 0x%X --> 0x%X", txdata, rxdata ); 
-        }
-        else
-        {
-            LOG( "raspicomm_start_transfer: no data to send???" ); 
-        }
-    }
-#endif
+    spin_unlock_bh( &dev_lock ); 
 }
 
 static int raspicomm_spi0_send( unsigned int tx )
@@ -620,82 +815,8 @@ static int raspicomm_spi0_send( unsigned int tx )
 static irqreturn_t raspicomm_irq_handler( int irq, void* dev_id )
 {
     LOG( "raspicomm_irq_handler" );
-    tasklet_schedule( &raspicomm_tasklet );
-    LOG( "tasklet enabled" );
+    rpc_spi_msg_async( &irq_msg_read, MAX3140_READ_DATA );
     return IRQ_HANDLED;
-}
-
-static void raspicomm_tasklet_func( unsigned long arg )
-{
-    int rxdata, txdata;
-
-    LOG( "raspicomm_tasklet_func entered" );
-    // AHB Der Zugriff auf den UART wird durch einen Spinlock abgesichert
-    // (exklusiver Zugriff), somit kann auch
-    //         ... start_transfer() auf die UART zugreifen
-    spin_lock_bh( &dev_lock );
-    LOG( "irq locked" );
-
-    // issue a read command to discover the cause of the interrupt
-    rxdata = raspicomm_spi0_send( MAX3140_READ_DATA );
-
-    if( rxdata & MAX3140_UART_R )
-    {
-        // data is available in the receive register
-        // handle the received data
-        raspicomm_rs485_received( OpenTTY, rxdata & 0x00FF );
-        LOG( "raspicomm_irq recv: 0x%X", rxdata );
-    }
-    if( rxdata & MAX3140_UART_T )
-    {
-        // the transmit buffer is empty
-        // get the data to send from the transmit queue
-        if( queue_dequeue( &TxQueue, &txdata ) )
-        {
-            // send the data (RTS enabled) AHB rxdata für Log
-            rxdata = raspicomm_spi0_send( MAX3140_WRITE_DATA | txdata | raspicomm_max3140_get_parity_flag( (char)txdata ) );
-            LOG( "raspicomm_irq sent: 0x%X --> 0x%X", txdata, rxdata );
-        }
-        else
-        {
-            // set bits R + T (bit 15 + bit 14) and clear TM (bit 11) transmit buffer empty
-            SpiConfig = (SpiConfig | MAX3140_WRITE_CONFIG) & ~MAX3140_UART_TM;
-            raspicomm_spi0_send( SpiConfig );
-
-            // give the max3140 enough time to send the data over usart
-            // before disabling RTS, else the transmission is broken
-            // AHB Erläuterung: Microsekunden Verzögerung:
-            // 10.000.000/Baudrate: 9600 --> ca. 1 mSec
-            spin_unlock_bh( &dev_lock ); 
-            LOG( "irq delay" );
-            udelay( SwBacksleep ); 
-            LOG( "irq lock 2" );
-            spin_lock_bh( &dev_lock );
-            LOG( "irq locked 2" );
-
-            // did anybody add more daya to send?
-            if( queue_dequeue( &TxQueue, &txdata ) )
-            {
-                // send the data (RTS enabled) AHB rxdata für Log
-                rxdata = raspicomm_spi0_send( MAX3140_WRITE_DATA | txdata | raspicomm_max3140_get_parity_flag( (char)txdata ) );
-                LOG( "raspicomm_irq sent: 0x%X --> 0x%X", txdata, rxdata );
-            }
-            else
-            {
-                // enable receive by disabling RTS
-                // (TE set so that no data is sent)
-                raspicomm_spi0_send( MAX3140_WRITE_DATA_R | MAX3140_WRITE_DATA_RTS | MAX3140_WRITE_DATA_TE );
-                // AHB
-                LOG( "raspicomm_irq RTS disabled --> receiving..." ); 
-            }
-        }
-    } 
-
-    // AHB Freigabe des Locks
-    spin_unlock_bh( &dev_lock ); 
-
-    LOG( "raspicomm_tasklet_func done" );
-    // return IRQ_HANDLED;
 }
 
 // this function pushes a received character to the opened tty device,
@@ -769,27 +890,25 @@ static int raspicommDriver_write( struct tty_struct* tty,
     const unsigned char* buf, int count )
 {
     int bytes_written = 0;
+    int rc;
 
     LOG( "raspicommDriver_write(count=%i)\n", count );
 
-    spin_lock_bh( &dev_lock );
-    LOG( "locked" );
     while( bytes_written < count )
     {
-        if( queue_enqueue( &TxQueue, buf[bytes_written] ) )
+        spin_lock_bh( &dev_lock );
+        rc = queue_enqueue( &TxQueue, buf[bytes_written] );
+        spin_unlock_bh( &dev_lock ); 
+        if( rc )
         {
             bytes_written++;
         }
         else
         {
             // kein Platz mehr vorhanden --> schlafen, senden
-            spin_unlock_bh( &dev_lock ); 
-            LOG( "life is boring" );
             // (mf) is this the right order and the right thing to do here? +++
             cpu_relax();
 
-            LOG( "yawn" );
-            spin_lock_bh( &dev_lock );
             raspicomm_start_transfer();
         } 
     }
@@ -798,7 +917,6 @@ static int raspicommDriver_write( struct tty_struct* tty,
     // (falls nicht bereits oben bei Platzmangel)
     raspicomm_start_transfer();
     LOG( "unlocking" );
-    spin_unlock_bh( &dev_lock ); 
     LOG( "raspicommDriver_write done" );
 
     return bytes_written;
