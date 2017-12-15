@@ -28,7 +28,7 @@
 #include <linux/hrtimer.h>
 // for hrtimer
 #include <linux/ktime.h>
-#define DEBUG
+
 #include "module.h"
 // needed for queue_xxx functions
 #include "queue.h"         
@@ -60,6 +60,8 @@ typedef enum {
 } MAX3140_WRITE_DATA_t;
 
 typedef enum {
+    MAX3140_STOP_COMMUNICATION  = 1 << 16,
+
     MAX3140_UART_R      = 1 << 15, 
     MAX3140_UART_T      = 1 << 14,
     MAX3140_UART_FEN    = 1 << 13,
@@ -140,7 +142,7 @@ static bool raspicomm_max3140_apply_config( void );
 static int raspicomm_spi0_send( unsigned int mosi );
 static void raspicomm_rs485_received( struct tty_struct* tty, char c );
 static irqreturn_t raspicomm_irq_handler( int irq, void* dev_id );
-static int raspicomm_max3140_get_parity_flag( int n );
+static int max3140_make_write_data_cmd( int n );
 
 // ****************************************************************************
 // *** END raspicomm private functions ****
@@ -233,6 +235,7 @@ static rpc_spi_msg_t irq_msg_read;
 static rpc_spi_msg_t irq_msg_write;
 static rpc_spi_msg_t stop_transmitting;
 static struct hrtimer last_byte_sent_timer;
+static int last_byte_sent_timer_initialized;
 
 // ****************************************************************************
 // **** END raspicomm private fields
@@ -341,7 +344,7 @@ static void irq_msg_read_done( void* context )
 {
     int rxdata, txdata, rc;
 
-    LOG( "" );
+    LOG( "irq_msg_read_done" );
     rxdata = rpc_spi_msg_rx( context );
     if( rxdata & MAX3140_UART_R )
     {
@@ -359,7 +362,7 @@ static void irq_msg_read_done( void* context )
     rc = queue_dequeue( &TxQueue, &txdata );
     if( rc )
     {
-        txdata |= MAX3140_WRITE_DATA | raspicomm_max3140_get_parity_flag( txdata );
+        txdata = max3140_make_write_data_cmd( txdata );
     }
     else
     {
@@ -421,17 +424,37 @@ module_exit( raspicomm_exit );
 static void raspicomm_cleanup( void )
 {
     LOG( "cleanup all" );
+
+    spin_lock_bh( &dev_lock );
+    // set the shutdown flag
+    SpiConfig |= MAX3140_STOP_COMMUNICATION;
+    // clear the queue
+    TxQueue.read = TxQueue.write;
+    spin_unlock_bh( &dev_lock ); 
+
+    // remove the interrupt
+    if( irqNumber >= 0 )
+    {
+        LOG( "free_irq" );
+        free_irq( irqNumber, NULL );
+    }
+
+    // how do i wait for all SPI transfers to finish?
+    // maybe try with a delay (mf) ++++
+    // udelay( 10000 );
+    msleep( 10 );
+
+    // do all the remaining cleanup...
+    if( last_byte_sent_timer_initialized )
+    {
+        hrtimer_cancel( &last_byte_sent_timer );
+    }
     if( raspicommDriver )
     {
         LOG( "tty_unregister_driver" );
         tty_unregister_driver( raspicommDriver );
         LOG( "put_tty_driver" );
         put_tty_driver( raspicommDriver );
-    }
-    if( irqNumber >= 0 )
-    {
-        LOG( "free_irq" );
-        free_irq( irqNumber, NULL );
     }
     if( irqGPIO >= 0 )
     {
@@ -463,8 +486,7 @@ static int __init raspicomm_init( void )
     int result;
 
     // log the start of the initialization
-    LOG( "kernel module initialization 1" );
-
+    LOG( "raspicommrs485 init, compiled " COMPILETIME );
 
     LOG( "initializing globals" );
     raspicommDriver = NULL;
@@ -479,6 +501,7 @@ static int __init raspicomm_init( void )
     spi_slave = NULL;
     irqGPIO = -EINVAL;
     irqNumber = -EINVAL;
+    last_byte_sent_timer_initialized = 0;
 
     LOG( "spi_busnum_to_master" );
     master = spi_busnum_to_master( 0 );
@@ -597,6 +620,7 @@ static int __init raspicomm_init( void )
     LOG( "hrtimer_init last_byte_sent_timer" );
     hrtimer_init( &last_byte_sent_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL );
     last_byte_sent_timer.function = &last_byte_sent;
+    last_byte_sent_timer_initialized = 1;
 
     // successfully initialized the module
     LOG( "raspicomm_init() completed" );
@@ -701,10 +725,12 @@ static bool raspicomm_max3140_apply_config()
 
 // Uncommented by javicient
 
-static int raspicomm_max3140_get_parity_flag( int n )
+static int max3140_make_write_data_cmd( int data )
 {
+    data |= MAX3140_WRITE_DATA;
     if( ParityEnabled )
     {
+        int n = data;
         // put the xor of the lowest 8 bits into bit 0 of n
         n ^= (n >> 4);
         n ^= (n >> 2);
@@ -713,12 +739,9 @@ static int raspicomm_max3140_get_parity_flag( int n )
         // now 0 = even number of one bits, 1 = odd
         // add parity config
         n ^= ParityIsOdd;
-        return n << MAX3140_PARITY_BIT_INDEX;
+        data |= n << MAX3140_PARITY_BIT_INDEX;
     }
-    else
-    {
-        return 0;
-    }
+    return data;
 }
 
 static void raspicomm_start_transfer()
@@ -734,7 +757,7 @@ static void raspicomm_start_transfer()
     rc = queue_dequeue( &TxQueue, &data );
     if( rc )
     {
-        data = MAX3140_WRITE_DATA | data | raspicomm_max3140_get_parity_flag( data);
+        data = max3140_make_write_data_cmd( data );
         SpiConfig = SpiConfig | MAX3140_WRITE_CONFIG | MAX3140_UART_TM;
         rpc_spi_msg2_async( &start_transmitting, data, SpiConfig );
     }
@@ -892,7 +915,15 @@ static int raspicommDriver_write( struct tty_struct* tty,
     int bytes_written = 0;
     int rc;
 
-    LOG( "raspicommDriver_write(count=%i)\n", count );
+    LOG( "raspicommDriver_write(count=%i)", count );
+    spin_lock_bh( &dev_lock );
+    rc = SpiConfig;
+    spin_unlock_bh( &dev_lock ); 
+    if( rc & MAX3140_STOP_COMMUNICATION )
+    {
+        // ++++ what errors are allowed to be returned here?
+        return 0;
+    }
 
     while( bytes_written < count )
     {
@@ -906,7 +937,7 @@ static int raspicommDriver_write( struct tty_struct* tty,
         else
         {
             // kein Platz mehr vorhanden --> schlafen, senden
-            // (mf) is this the right order and the right thing to do here? +++
+            // +++ (mf) can't i just return bytes_written here?
             cpu_relax();
 
             raspicomm_start_transfer();
