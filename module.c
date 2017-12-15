@@ -491,7 +491,7 @@ static int __init raspicomm_init( void )
     OpenTTY = NULL;
     memset( &TxQueue, 0, sizeof(TxQueue) );
     SwBacksleep = raspicomm_max3140_get_swbacksleep( 9600 );
-    SpiConfig = 0;
+    SpiConfig = raspicomm_max3140_get_uart_config( 9600, DATABITS_8, STOPBITS_ONE, PARITY_OFF );
     spi_slave = NULL;
     irqGPIO = -EINVAL;
     irqNumber = -EINVAL;
