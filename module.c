@@ -260,13 +260,9 @@ static void rpc_spi_msg2_init( rpc_spi_msg2_t* msg,
             void (*complete)(void*), const char* name )
 {
     memset( msg, 0, sizeof(*msg) );
-    LOG( "spi_message_init_no_memset %p %p", msg, &msg->msg );
     spi_message_init_no_memset( &msg->msg );
-    LOG( "spi_message_add_tail" );
     spi_message_add_tail( &msg->x1.xfer, &msg->msg );
-    LOG( "spi_message_add_tail" );
     spi_message_add_tail( &msg->x2.xfer, &msg->msg );
-    LOG( "remaining fields" );
     msg->msg.spi = spi_slave;
     msg->msg.complete = complete;
     msg->msg.context = msg;
@@ -278,7 +274,6 @@ static void rpc_spi_msg2_init( rpc_spi_msg2_t* msg,
     msg->x2.xfer.rx_buf = msg->x2.rx_buf;
     msg->x2.xfer.len = 2;
     msg->name = name;
-    LOG( "done" );
 }
 
 static int rpc_spi_msg_async( rpc_spi_msg_t* msg, unsigned int tx )
@@ -607,17 +602,14 @@ static int __init raspicomm_init( void )
         goto cleanup;
     }
 
-    LOG( "rpc_spi_msg2_init start_transmitting" );
+    LOG( "initializing messages" );
     rpc_spi_msg2_init( &start_transmitting, start_transmitting_done,
             "start_transmitting" );
-    LOG( "rpc_spi_msg_init irq_msg_read" );
     rpc_spi_msg_init( &irq_msg_read, irq_msg_read_done, "irq_msg_read" );
-    LOG( "rpc_spi_msg_init irq_msg_write" );
     rpc_spi_msg_init( &irq_msg_write, irq_msg_write_done, "irq_msg_write" );
-    LOG( "rpc_spi_msg_init stop_transmitting" );
     rpc_spi_msg_init( &stop_transmitting, stop_transmitting_done,
             "stop_transmitting" );
-    LOG( "hrtimer_init last_byte_sent_timer" );
+    LOG( "initializing hrtimer" );
     hrtimer_init( &last_byte_sent_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL );
     last_byte_sent_timer.function = &last_byte_sent;
     last_byte_sent_timer_initialized = 1;
