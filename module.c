@@ -54,41 +54,74 @@ typedef enum {
 } Parity;
 
 typedef enum {
-    MAX3140_WRITE_DATA_R = 1 << 15,
-    MAX3140_WRITE_DATA_TE = 1 << 10,
-    MAX3140_WRITE_DATA_RTS = 1 << 9
-} MAX3140_WRITE_DATA_t;
+    MAX3140_STOP_COMMUNICATION      = 1 << 16,
 
-typedef enum {
-    MAX3140_STOP_COMMUNICATION  = 1 << 16,
+    // command to read data
+    MAX3140_CMD_READ_DATA           = 0 << 14,
+    // command to read configuration
+    MAX3140_CMD_READ_CONFIG         = 1 << 14,
+    // command to write data
+    MAX3140_CMD_WRITE_DATA          = 2 << 14,
+    // command to write configuration
+    MAX3140_CMD_WRITE_CONFIG        = 3 << 14,
 
-    MAX3140_UART_R      = 1 << 15, 
-    MAX3140_UART_T      = 1 << 14,
-    MAX3140_UART_FEN    = 1 << 13,
-    MAX3140_UART_SHDNo  = 1 << 12,
-    MAX3140_UART_TM     = 1 << 11,
-    MAX3140_UART_RM     = 1 << 10,
-    MAX3140_UART_PM     = 1 << 9,
-    MAX3140_UART_RAM    = 1 << 8,
-    MAX3140_UART_IR     = 1 << 7,
-    MAX3140_UART_ST     = 1 << 6,
-    // Parity Enable
-    MAX3140_UART_PE     = 1 << 5,    
-    MAX3140_UART_L      = 1 << 4,
-    MAX3140_UART_B3     = 1 << 3,
-    MAX3140_UART_B2     = 1 << 2,
-    MAX3140_UART_B1     = 1 << 1,
-    MAX3140_UART_B0     = 1 << 0,
+    // signals that a byte has been received
+    // both data commands transmit the received byte
+    MAX3140_RECEIVE_BUFFER_FULL     = 1 << 15, 
+    // signals that a byte can be added to the transmit buffer
+    MAX3140_TRANSMIT_BUF_EMPTY      = 1 << 14,
 
-    MAX3140_PARITY_BIT_INDEX    = 8,
-    MAX3140_wd_Pt = 1 << 8    
+    // mask including all the configuration flags
+    MAX3140_CONFIG_MASK             = 0x3FFF,
 
-} MAX3140_UartFlags;
+    // disable the receive fifo
+    MAX3140_CFG_DISABLE_FIFO        = 1 << 13,
+    // shutdown the uart
+    MAX3140_CFG_SHUTDOWN_UART       = 1 << 12,
+    // enable the transmit buffer empty interrupt
+    MAX3140_CFG_ENABLE_TX_INT       = 1 << 11,
+    // enable the receive data interrupt
+    MAX3140_CFG_ENABLE_RX_INT       = 1 << 10,
+    // enable the parity bit receive interrupt
+    MAX3140_CFG_ENABLE_PBRX_INT     = 1 << 9,
+    // enable the receiver activity and frame error interrupt
+    MAX3140_CFG_ENABLE_RA_FE_INT    = 1 << 8,
+    // swith the IRDAmode on
+    MAX3140_CFG_IRDA_MODE_ON        = 1 << 7,
+    // transmit two stop bits instead of one
+    MAX3140_CFG_TWO_STOP_BITS       = 1 << 6,
+    // enable the parity
+    MAX3140_CFG_ENABLE_PARITY       = 1 << 5,
+    // use 7 bit words instead of 8 bit
+    MAX3140_CFG_7_BIT_WORDS         = 1 << 4,
+    // mask for the baudrate bits
+    MAX3140_CFG_BAUDRATE_MASK       = 0x0F,
 
-#define MAX3140_WRITE_CONFIG ( MAX3140_UART_R | MAX3140_UART_T )
-#define MAX3140_READ_CONFIG ( MAX3140_UART_T )
-#define MAX3140_READ_DATA ( 0 )
-#define MAX3140_WRITE_DATA ( MAX3140_UART_R )
+    // the defined baudrates
+    MAX3140_BAUDRATE_600            = 0xF,
+    MAX3140_BAUDRATE_1200           = 0xE,
+    MAX3140_BAUDRATE_2400           = 0xD,
+    MAX3140_BAUDRATE_4800           = 0xC,
+    MAX3140_BAUDRATE_9600           = 0xB,
+    MAX3140_BAUDRATE_19200          = 0xA,
+    MAX3140_BAUDRATE_38400          = 0x9,
+    MAX3140_BAUDRATE_57600          = 0x2,
+    MAX3140_BAUDRATE_115200         = 0x1,
+    MAX3140_BAUDRATE_230400         = 0x0,
+
+    // index (bit nr) of the parity bit in the config commands
+    MAX3140_PARITY_BIT_INDEX        = 8,
+
+    // the write data command doe snot send a byte if this flag is set
+    MAX3140_WRDAT_DO_NOT_TRANSMIT   = 1 << 10,
+    // if set the transmitter is disabled and receiving data is possible
+    MAX3140_WRDAT_TRANSMITTER_OFF   = 1 << 9,
+
+    MAX3140_CMD_RECEIVE_MODE        = MAX3140_CMD_WRITE_DATA |
+                                      MAX3140_WRDAT_DO_NOT_TRANSMIT |
+                                      MAX3140_WRDAT_TRANSMITTER_OFF,
+
+} MAX3140_Flags;
 
 
 typedef struct {
@@ -218,11 +251,10 @@ static struct tty_struct* OpenTTY = NULL;
 static queue_t TxQueue;
 
 // variable used in the delay to simulate the baudrate
-// static int SwBacksleep;
-static ktime_t SwBacksleep;
+static ktime_t OneCharDelay;
 
-// config setting of the spi0
-static int SpiConfig;
+// config setting of the UART
+static int UartConfig;
 
 static struct spi_device *spi_slave;
 
@@ -308,7 +340,8 @@ static unsigned int rpc_spi_msg_rx( void* context )
     return rc;
 }
 
-static void rpc_spi_msg2_rx( void* context, unsigned int* prx1, unsigned int* prx2 )
+static void rpc_spi_msg2_rx( void* context,
+            unsigned int* prx1, unsigned int* prx2 )
 {
     rpc_spi_msg2_t* msg = context;
     unsigned int rx1 = (msg->x1.rx_buf[0] << 8) | msg->x1.rx_buf[1];
@@ -325,7 +358,7 @@ static void start_transmitting_done( void* context )
 
     LOG( "start_transmitting_done" );
     rpc_spi_msg2_rx( context, &rxdata, NULL );
-    if( rxdata & MAX3140_UART_R )
+    if( rxdata & MAX3140_RECEIVE_BUFFER_FULL )
     {
         // data is available in the receive register
         // handle the received data
@@ -340,16 +373,16 @@ static void irq_msg_read_done( void* context )
 
     LOG( "irq_msg_read_done" );
     rxdata = rpc_spi_msg_rx( context );
-    if( rxdata & MAX3140_UART_R )
+    if( rxdata & MAX3140_RECEIVE_BUFFER_FULL )
     {
         // data is available in the receive register
         // handle the received data
         raspicomm_rs485_received( OpenTTY, rxdata & 0x00FF );
         LOG( "irq_msg_read_done recv: 0x%X", rxdata );
     }
-    if( (rxdata & MAX3140_UART_T) == 0 )
+    if( (rxdata & MAX3140_TRANSMIT_BUF_EMPTY) == 0 )
     {
-        // nothing to send
+        // no space in the transmit buffer
         return;
     }
     spin_lock_bh( &dev_lock );
@@ -360,8 +393,9 @@ static void irq_msg_read_done( void* context )
     }
     else
     {
-        SpiConfig &= ~MAX3140_UART_TM;
-        txdata = SpiConfig;
+        // no more data to send, disable transmit interrupt
+        UartConfig &= ~MAX3140_CFG_ENABLE_TX_INT;
+        txdata = UartConfig;
     }
     spin_unlock_bh( &dev_lock ); 
     rpc_spi_msg_async( &irq_msg_write, txdata );
@@ -369,7 +403,7 @@ static void irq_msg_read_done( void* context )
     {
         // after the last byte has been sent the transmission is finished
         LOG( "start HR timer last_byte_sent_timer" );
-        hrtimer_start( &last_byte_sent_timer, SwBacksleep, HRTIMER_MODE_REL );
+        hrtimer_start( &last_byte_sent_timer, OneCharDelay, HRTIMER_MODE_REL );
     }
 }
 
@@ -381,9 +415,8 @@ static void irq_msg_write_done( void* context )
 
 static enum hrtimer_restart last_byte_sent( struct hrtimer *timer )
 {
-    int txdata = MAX3140_WRITE_DATA_R | MAX3140_WRITE_DATA_RTS | MAX3140_WRITE_DATA_TE;
     LOG( "last_byte_sent" );
-    rpc_spi_msg_async( &stop_transmitting, txdata );
+    rpc_spi_msg_async( &stop_transmitting, MAX3140_CMD_RECEIVE_MODE );
     return HRTIMER_NORESTART;
 }
 
@@ -421,7 +454,7 @@ static void raspicomm_cleanup( void )
 
     spin_lock_bh( &dev_lock );
     // set the shutdown flag
-    SpiConfig |= MAX3140_STOP_COMMUNICATION;
+    UartConfig |= MAX3140_STOP_COMMUNICATION;
     // clear the queue
     TxQueue.read = TxQueue.write;
     spin_unlock_bh( &dev_lock ); 
@@ -490,8 +523,8 @@ static int __init raspicomm_init( void )
     ParityEnabled = 0;
     OpenTTY = NULL;
     memset( &TxQueue, 0, sizeof(TxQueue) );
-    SwBacksleep = raspicomm_max3140_get_swbacksleep( 9600 );
-    SpiConfig = raspicomm_max3140_get_uart_config( 9600, DATABITS_8, STOPBITS_ONE, PARITY_OFF );
+    OneCharDelay = raspicomm_max3140_get_swbacksleep( 9600 );
+    UartConfig = raspicomm_max3140_get_uart_config( 9600, DATABITS_8, STOPBITS_ONE, PARITY_OFF );
     spi_slave = NULL;
     irqGPIO = -EINVAL;
     irqNumber = -EINVAL;
@@ -636,17 +669,17 @@ static unsigned char raspicomm_max3140_get_baudrate_index( speed_t speed )
 {
     switch( speed )
     {
-        case 600: return 0xF;
-        case 1200: return 0xE;
-        case 2400: return 0xD;
-        case 4800: return 0xC;
-        case 9600: return 0xB;
-        case 19200: return 0xA;
-        case 38400: return 0x9;
-        case 57600: return 0x2;
-        case 115200: return 0x1;
-        case 230400: return 0x0;
-        default: return raspicomm_max3140_get_baudrate_index( 9600 );
+        case 600:    return MAX3140_BAUDRATE_600;
+        case 1200:   return MAX3140_BAUDRATE_1200;
+        case 2400:   return MAX3140_BAUDRATE_2400;
+        case 4800:   return MAX3140_BAUDRATE_4800;
+        default:
+        case 9600:   return MAX3140_BAUDRATE_9600;
+        case 19200:  return MAX3140_BAUDRATE_19200;
+        case 38400:  return MAX3140_BAUDRATE_38400;
+        case 57600:  return MAX3140_BAUDRATE_57600;
+        case 115200: return MAX3140_BAUDRATE_115200;
+        case 230400: return MAX3140_BAUDRATE_230400;
     }
 }
 
@@ -654,10 +687,9 @@ static unsigned char raspicomm_max3140_get_baudrate_index( speed_t speed )
 static unsigned int raspicomm_max3140_get_uart_config( speed_t speed,
                 Databits databits, Stopbits stopbits, Parity parity )
 {
-    unsigned int value = 0;
+    unsigned int value = MAX3140_CMD_WRITE_CONFIG;
 
-    value |= MAX3140_WRITE_CONFIG;
-    value |= MAX3140_UART_RM;
+    value |= MAX3140_CFG_ENABLE_RX_INT;
     value |= raspicomm_max3140_get_baudrate_index( speed );
     value |= stopbits << 6;
     value |= parity << 5;
@@ -677,18 +709,18 @@ static ktime_t raspicomm_max3140_get_swbacksleep( speed_t speed )
 static void raspicomm_max3140_configure( speed_t speed,
                 Databits databits, Stopbits stopbits, Parity parity )
 {
-    ktime_t swBacksleep = raspicomm_max3140_get_swbacksleep( speed );
+    ktime_t oneCharDelay = raspicomm_max3140_get_swbacksleep( speed );
     int config = raspicomm_max3140_get_uart_config( speed, databits,
                     stopbits, parity );
 
     LOG( "raspicomm_max3140_configure() called "
         "speed=%i, databits=%i, stopbits=%i, parity=%i "
-        "=> config: %X, swBacksleep: %d",
+        "=> config: %X, oneCharDelay: %d",
         speed, databits, stopbits, parity,
-        config, (int)ktime_to_us(swBacksleep) );
+        config, (int)ktime_to_us(oneCharDelay) );
 
-    SpiConfig = config;
-    SwBacksleep = swBacksleep;
+    UartConfig = config;
+    OneCharDelay = oneCharDelay;
 }
 
 // initializes the spi0 for supplied configuration
@@ -697,19 +729,19 @@ static bool raspicomm_max3140_apply_config()
     int rxconfig;
 
     // configure the SPI
-    raspicomm_spi0_send( SpiConfig );
+    raspicomm_spi0_send( UartConfig );
 
     // read back the config
-    rxconfig = raspicomm_spi0_send( MAX3140_READ_CONFIG );
+    rxconfig = raspicomm_spi0_send( MAX3140_CMD_READ_CONFIG );
 
-    if( (rxconfig & 0xFFF) != (SpiConfig & 0xFFF))
+    if( (rxconfig & 0xFFF) != (UartConfig & 0xFFF))
     {
         return 0;
     }
 
     // write data (R set, T not set) and enable receive by disabling RTS
     // (TE set so that no data is sent)
-    raspicomm_spi0_send( MAX3140_WRITE_DATA_R | MAX3140_WRITE_DATA_TE | MAX3140_WRITE_DATA_RTS );
+    raspicomm_spi0_send( MAX3140_CMD_RECEIVE_MODE );
 
     return 1;
 }
@@ -718,7 +750,7 @@ static bool raspicomm_max3140_apply_config()
 
 static int max3140_make_write_data_cmd( int data )
 {
-    data |= MAX3140_WRITE_DATA;
+    data |= MAX3140_CMD_WRITE_DATA;
     if( ParityEnabled )
     {
         int n = data;
@@ -803,7 +835,7 @@ static int raspicomm_spi0_send( unsigned int tx )
 static irqreturn_t raspicomm_irq_handler( int irq, void* dev_id )
 {
     LOG( "raspicomm_irq_handler" );
-    rpc_spi_msg_async( &irq_msg_read, MAX3140_READ_DATA );
+    rpc_spi_msg_async( &irq_msg_read, MAX3140_CMD_READ_DATA );
     return IRQ_HANDLED;
 }
 
@@ -886,7 +918,7 @@ static int raspicommDriver_write( struct tty_struct* tty,
         return 0;
     }
     spin_lock_bh( &dev_lock );
-    if( SpiConfig & MAX3140_STOP_COMMUNICATION )
+    if( UartConfig & MAX3140_STOP_COMMUNICATION )
     {
         // this device is gone
         rc = -ENODEV;
@@ -894,14 +926,14 @@ static int raspicommDriver_write( struct tty_struct* tty,
     else
     {
         rc = 0;
-        if( !(SpiConfig & MAX3140_UART_TM) )
+        if( !(UartConfig & MAX3140_CFG_ENABLE_TX_INT) )
         {
             // no transfer in progress or it is sending the last byte
             LOG( "starting transfer" );
             // send the first byte
             data = max3140_make_write_data_cmd( buf[0] );
-            SpiConfig |= MAX3140_WRITE_CONFIG | MAX3140_UART_TM;
-            rpc_spi_msg2_async( &start_transmitting, data, SpiConfig );
+            UartConfig |= MAX3140_CFG_ENABLE_TX_INT;
+            rpc_spi_msg2_async( &start_transmitting, data, UartConfig );
             rc++;
             // cancel a pending EOT
             hrtimer_cancel( &last_byte_sent_timer );
@@ -928,7 +960,7 @@ static int raspicommDriver_write_room( struct tty_struct *tty )
     int rc;
 
     spin_lock_bh( &dev_lock );
-    if( SpiConfig & MAX3140_STOP_COMMUNICATION )
+    if( UartConfig & MAX3140_STOP_COMMUNICATION )
     {
         rc = 0;
     }
