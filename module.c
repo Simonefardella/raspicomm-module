@@ -448,19 +448,29 @@ static void irq_msg_read_done( void* context )
         return;
     }
     spin_lock_bh( &dev_lock );
-    rc = queue_dequeue( &TxQueue, &txdata );
-    if( rc )
+    if( UartConfig & MAX3140_CFG_ENABLE_TX_INT )
     {
-        txdata = max3140_make_write_data_cmd( txdata );
+        // transmit interrupt is on, this means we have to check the queue
+        rc = queue_dequeue( &TxQueue, &txdata );
+        if( rc )
+        {
+            txdata = max3140_make_write_data_cmd( txdata );
+        }
+        else
+        {
+            // no more data to send, disable transmit interrupt
+            UartConfig &= ~MAX3140_CFG_ENABLE_TX_INT;
+            txdata = UartConfig;
+        }
+        rpc_spi_msg_async( &irq_msg_write, txdata );
     }
     else
     {
-        // no more data to send, disable transmit interrupt
-        UartConfig &= ~MAX3140_CFG_ENABLE_TX_INT;
-        txdata = UartConfig;
+        // transmit interrupt is off, nothing to do
+        // prevent timer from starting
+        rc = 1;
     }
     spin_unlock_bh( &dev_lock ); 
-    rpc_spi_msg_async( &irq_msg_write, txdata );
     if( !rc )
     {
         // after the last byte has been sent the transmission is finished
@@ -760,7 +770,8 @@ static void raspicomm_max3140_configure( speed_t speed,
 {
     ktime_t delay;
     int config = MAX3140_CMD_WRITE_CONFIG | MAX3140_CFG_ENABLE_RX_INT;
-    int bit_count = 8;
+    // default is 8 data bits plus startbit plus stop bit
+    int bit_count = 8+2;
 
     config |= raspicomm_max3140_get_baudrate_index( speed );
     if( databits == DATABITS_7 )
