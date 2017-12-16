@@ -256,6 +256,67 @@ static int last_byte_sent_timer_initialized;
 // **** END raspicomm private fields
 // ****************************************************************************
 
+#ifdef LOG_MSG_DETAILS
+static void log_max3140_message( unsigned char* txbuf, unsigned char* rxbuf )
+{
+    int tx;
+    int rx;
+    char buffer[256];
+
+    tx = (txbuf[0] << 8) | txbuf[1];
+    rx = (rxbuf[0] << 8) | rxbuf[1];
+    switch( tx>>14 )
+    {
+        case 0:
+            sprintf( buffer,
+                "RdDat %02X %02X -- %02X %02X "
+                "R=%d T=%d RA/FE=%d CTS=%d P=%d D=%02X",
+                txbuf[0], txbuf[1],
+                rxbuf[0], rxbuf[1],
+                (rx>>15)&1, (rx>>14)&1,
+                (rx>>10)&1, (rx>>9)&1, (rx>>8)&1, rx&255 );
+            break;
+        case 1:
+            sprintf( buffer,
+                "RdCfg %02X %02X TEST=%d -- %02X %02X "
+                "R=%d T=%d FEN=%d SHDN=%d TM=%d RM=%d PM=%d RAM=%d "
+                "IR=%d ST=%d PE=%d L=%d B3=%X",
+                txbuf[0], txbuf[1],
+                tx&1,
+                rxbuf[0], rxbuf[1],
+                (rx>>15)&1, (rx>>14)&1, (rx>>13)&1, (rx>>12)&1,
+                (rx>>11)&1, (rx>>10)&1, (rx>>9)&1, (rx>>8)&1,
+                (rx>>7)&1, (rx>>6)&1, (rx>>5)&1, (rx>>4)&1,
+                rx&15 );
+            break;
+        case 2:
+            sprintf( buffer,
+                "WrDat %02X %02X TE=%d RTS=%d P=%d D=%02X "
+                "-- %02X %02X R=%d T=%d RA/FE=%d CTS=%d P=%d D=%02X",
+                txbuf[0], txbuf[1],
+                (tx>>10)&1, (tx>>9)&1, (tx>>8)&1, tx&255,
+                rxbuf[0], rxbuf[1],
+                (rx>>15)&1, (rx>>14)&1,
+                (rx>>10)&1, (rx>>9)&1, (rx>>8)&1, rx&255 );
+            break;
+        case 3:
+            sprintf( buffer,
+                "WrCfg %02X %02X FEN=%d SHDN=%d TM=%d RM=%d PM=%d RAM=%d "
+                "IR=%d ST=%d PE=%d L=%d BR=%X -- %02X %02X R=%d T=%d",
+                txbuf[0], txbuf[1],
+                (tx>>13)&1, (tx>>12)&1, (tx>>11)&1, (tx>>10)&1,
+                (tx>>9)&1, (tx>>8)&1, (tx>>7)&1, (tx>>6)&1,
+                (tx>>5)&1, (tx>>4)&1, tx&15,
+                rxbuf[0], rxbuf[1],
+                (rx>>15)&1, (rx>>14)&1 );
+            break;
+    }
+    LOG( "%s", buffer );
+}
+#else
+#define log_max3140_message(a,b) do{}while(0)
+#endif
+
 static void rpc_spi_msg_init( rpc_spi_msg_t* msg,
             void (*complete)(void*), const char* name )
 {
@@ -321,6 +382,7 @@ static unsigned int rpc_spi_msg_rx( void* context )
     rpc_spi_msg_t* msg = context;
     unsigned int rc = (msg->rx_buf[0] << 8) | msg->rx_buf[1];
     LOG( "spi_msg_rx(%s) = %04X", msg->name, rc );
+    log_max3140_message( msg->tx_buf, msg->rx_buf );
     return rc;
 }
 
@@ -331,6 +393,8 @@ static void rpc_spi_msg2_rx( void* context,
     unsigned int rx1 = (msg->x1.rx_buf[0] << 8) | msg->x1.rx_buf[1];
     unsigned int rx2 = (msg->x2.rx_buf[0] << 8) | msg->x2.rx_buf[1];
     LOG( "spi_msg_rx(%s) = %04X,%04X", msg->name, rx1, rx2 );
+    log_max3140_message( msg->x1.tx_buf, msg->x1.rx_buf );
+    log_max3140_message( msg->x2.tx_buf, msg->x2.rx_buf );
     if( prx1 ) *prx1 = rx1;
     if( prx2 ) *prx2 = rx2;
 }
@@ -733,73 +797,6 @@ static int max3140_make_write_data_cmd( int data )
     }
     return data;
 }
-
-#if 0 // +++-- move the decode part into a utility function...
-static int raspicomm_spi0_send( unsigned int tx )
-{
-    unsigned char txbuf[2], rxbuf[2];
-    unsigned int rx;
-    int rc;
-
-    txbuf[0] = tx >> 8;
-    txbuf[1] = tx;
-    rc = spi_transceive( spi_slave, txbuf, rxbuf, 2 );
-    if( rc < 0 )
-    {
-        printk( KERN_ERR "spi_transceive( %02X %02X failed with code %d",
-                txbuf[0], txbuf[1], rc );
-        return 0;
-    }
-    rx = (rxbuf[0] << 8) | rxbuf[1];
-#if 1
-    LOG( "raspicomm_spi0_send => %02X %02X <= %02X %02X",
-                txbuf[0], txbuf[1], rxbuf[0], rxbuf[1] );
-#else
-    {
-        char buffer[256];
-        switch( tx>>14 )
-        {
-            case 0:
-                sprintf( buffer, "RdDat %02X %02X -- %02X %02X R=%d T=%d RA/FE=%d CTS=%d P=%d D=%02X",
-                    txbuf[0], txbuf[1],
-                    rxbuf[0], rxbuf[1],
-                    (rx>>15)&1, (rx>>14)&1,
-                    (rx>>10)&1, (rx>>9)&1, (rx>>8)&1, rx&255 );
-                break;
-            case 1:
-                sprintf( buffer, "RdCfg %02X %02X TEST=%d -- %02X %02X R=%d T=%d FEN=%d SHDN=%d TM=%d RM=%d PM=%d RAM=%d IR=%d ST=%d PE=%d L=%d B3=%X",
-                    txbuf[0], txbuf[1],
-                    tx&1,
-                    rxbuf[0], rxbuf[1],
-                    (rx>>15)&1, (rx>>14)&1, (rx>>13)&1, (rx>>12)&1,
-                    (rx>>11)&1, (rx>>10)&1, (rx>>9)&1, (rx>>8)&1,
-                    (rx>>7)&1, (rx>>6)&1, (rx>>5)&1, (rx>>4)&1,
-                    rx&15 );
-                break;
-            case 2:
-                sprintf( buffer, "WrDat %02X %02X TE=%d RTS=%d P=%d D=%02X -- %02X %02X R=%d T=%d RA/FE=%d CTS=%d P=%d D=%02X",
-                    txbuf[0], txbuf[1],
-                    (tx>>10)&1, (tx>>9)&1, (tx>>8)&1, tx&255,
-                    rxbuf[0], rxbuf[1],
-                    (rx>>15)&1, (rx>>14)&1,
-                    (rx>>10)&1, (rx>>9)&1, (rx>>8)&1, rx&255 );
-                break;
-            case 3:
-                sprintf( buffer, "WrCfg %02X %02X FEN=%d SHDN=%d TM=%d RM=%d PM=%d RAM=%d IR=%d ST=%d PE=%d L=%d BR=%X -- %02X %02X R=%d T=%d",
-                    txbuf[0], txbuf[1],
-                    (tx>>13)&1, (tx>>12)&1, (tx>>11)&1, (tx>>10)&1,
-                    (tx>>9)&1, (tx>>8)&1, (tx>>7)&1, (tx>>6)&1,
-                    (tx>>5)&1, (tx>>4)&1, tx&15,
-                    rxbuf[0], rxbuf[1],
-                    (rx>>15)&1, (rx>>14)&1 );
-                break;
-        }
-        LOG( "%s", buffer );
-    }
-#endif
-    return rx;
-}
-#endif
 
 static irqreturn_t raspicomm_irq_handler( int irq, void* dev_id )
 {
