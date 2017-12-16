@@ -1,6 +1,8 @@
 # raspicomm-module
 raspicomm kernel module with tty driver support for rs485 (raspicommrs485.ko)
 
+This is a modifed version for kernel versions around 4.9, the SPI communication is completelyrewritten to use asynchronous communication only.
+
 ## Installation Instructions
 
  * Make and install the module (+++ document this)
