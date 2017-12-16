@@ -7,7 +7,7 @@ RPICOMM_MOD_DIR=/lib/modules/$(RPICOMM_K_VERS)
 RPICOMM_BUILD=$(RPICOMM_MOD_DIR)/build
 RPICOMM_INST=$(RPICOMM_MOD_DIR)/kernel/drivers/tty/serial
 RPICOMM_VERSION=$(shell cat version.txt)
-RPICOMM_DEBUG=$(shell awk '/pre[0-9]*$/{print "-DDEBUG"}' < version.txt)
+RPICOMM_DEBUG=$(shell awk '/pre[0-9]*$$/{print "-DDEBUG"}' < version.txt)
 RPICOMM_RELEASE=binaries/$(RPICOMM_K_VERS)
 
 FLAGS=-Werror -Wall $(RPICOMM_DEBUG) -DRASPICOMM_VERSION='\"$(RPICOMM_VERSION)\"'
