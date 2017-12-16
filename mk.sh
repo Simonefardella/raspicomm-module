@@ -15,10 +15,10 @@ while [ -n "$1" ]; do
 	esac
 	shift
 done
-FLAGS="$FLAGS $DEBUG"
+FLAGS="-Werror -Wall $FLAGS $DEBUG"
 
 yes '' | head -n 20
 #make -f Makefile_rpi "KCPPFLAGS=$FLAGS -DCOMPILETIME=\"\\\"$COMPILETIME\\\"\"" $CMDS
 echo "|$FLAGS|"
-make -f Makefile_rpi "KCPPFLAGS=$FLAGS" $CMDS
+make -f Makefile "KCPPFLAGS=$FLAGS" $CMDS
 
