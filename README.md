@@ -1,15 +1,13 @@
 # raspicomm-module
 raspicomm kernel module with tty driver support for rs485 (raspicommrs485.ko)
 
-## Non-Raspbian kernels
-Because I'm going through the motions of cross compiling the rs485 module for other Linux kernels, I thought I might as well host them on GitHub and (possibly) save time for other people doing the same thing.
-
-Currently I've only compiled for the *3.18.0-20-rpi2* kernel, intended for the (non-snappy) Ubuntu Raspberry Pi port.
-
 ## Installation Instructions
 
- * Copy the desired `raspicommrs485.ko module` from `module/linux/<kernel_name_here>/` in this repository to `/lib/modules/<kernel_name_here>` on your Raspberry Pi
+ * Make and install the module (+++ document this)
+ * Copy spi0devdis.dtbo to /boot/overlays/
+ * Edit /boot/config.txt and add the line "dtoverlay=spi0devdis" to the end.
  * Edit `/etc/modules` and append `raspicommrs485` to the end of the file
+ * Run: `dtoverlay spi0devdis`
  * Run: `depmod -a`
  * Run: `modprobe raspicommrs485`
  * Restart your Pi! (`shutdown -r now`)
