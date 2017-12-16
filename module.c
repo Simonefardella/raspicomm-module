@@ -50,7 +50,8 @@ typedef enum {
 
 typedef enum {
     PARITY_OFF = 0,
-    PARITY_ON = 1
+    PARITY_ODD = 1,
+    PARITY_EVEN = 2
 } Parity;
 
 typedef enum {
@@ -156,7 +157,7 @@ static void __exit raspicomm_exit( void );
 static unsigned char raspicomm_max3140_get_baudrate_index( speed_t speed );
 static void raspicomm_max3140_configure( speed_t speed, 
                 Databits databits, Stopbits stopbits, Parity parity );
-static void raspicomm_rs485_received( struct tty_struct* tty, char c );
+static void raspicomm_rs485_received( struct tty_struct* tty, int c );
 static irqreturn_t raspicomm_irq_handler( int irq, void* dev_id );
 static int max3140_make_write_data_cmd( int n );
 
@@ -410,7 +411,7 @@ static void start_transmitting_done( void* context )
     {
         // data is available in the receive register
         // handle the received data
-        raspicomm_rs485_received( OpenTTY, rxdata & 0x00FF );
+        raspicomm_rs485_received( OpenTTY, rxdata );
         LOG( "irq_msg_read_done recv: 0x%X", rxdata );
     }
 }
@@ -425,7 +426,7 @@ static void irq_msg_read_done( void* context )
     {
         // data is available in the receive register
         // handle the received data
-        raspicomm_rs485_received( OpenTTY, rxdata & 0x00FF );
+        raspicomm_rs485_received( OpenTTY, rxdata );
         LOG( "irq_msg_read_done recv: 0x%X", rxdata );
     }
     if( (rxdata & MAX3140_TRANSMIT_BUF_EMPTY) == 0 )
@@ -757,7 +758,7 @@ static void raspicomm_max3140_configure( speed_t speed,
         config |= MAX3140_CFG_TWO_STOP_BITS;
         databits++;
     }
-    if( parity == PARITY_ON )
+    if( parity != PARITY_OFF )
     {
         config |= MAX3140_CFG_ENABLE_PARITY;
         databits++;
@@ -775,6 +776,8 @@ static void raspicomm_max3140_configure( speed_t speed,
                 (MAX3140_BLOCK_COMMUNICATION | MAX3140_CFG_ENABLE_TX_INT);
     UartConfig = config;
     OneCharDelay = delay;
+    ParityEnabled = parity != PARITY_OFF;
+    ParityIsOdd = parity == PARITY_ODD;
     rpc_spi_msg_async( &configure_uart, UartConfig );
     spin_unlock_bh( &dev_lock ); 
 }
@@ -790,9 +793,10 @@ static int max3140_make_write_data_cmd( int data )
         n ^= (n >> 2);
         n ^= (n >> 1);
         n &= 1;
-        // now 0 = even number of one bits, 1 = odd
-        // add parity config
+        // now 0 = even number of one bits, 1 = odd, this is even parity
+        // add parity config, for odd parity the bit must be inverted
         n ^= ParityIsOdd;
+        // add the parity bit to the command
         data |= n << MAX3140_PARITY_BIT_INDEX;
     }
     return data;
@@ -807,9 +811,11 @@ static irqreturn_t raspicomm_irq_handler( int irq, void* dev_id )
 
 // this function pushes a received character to the opened tty device,
 // called by the interrupt function
-static void raspicomm_rs485_received( struct tty_struct* tty, char c )
+static void raspicomm_rs485_received( struct tty_struct* tty, int c )
 {
-    LOG( "raspicomm_rs485_received(c=%02X)", c );
+    LOG( "raspicomm_rs485_received(c=%03X)", c & 0x1FF );
+
+    // ++++ (mf) should check parity here!?!
 
     if( tty != NULL && tty->port != NULL )
     {
@@ -997,20 +1003,13 @@ static void raspicommDriver_set_termios( struct tty_struct* tty,
     if( cflag & PARENB ) 
     {
         // is it even or odd? store it for sending
-        ParityIsOdd = !!( cflag & PARODD ); 
-        parity = PARITY_ON;
-        ParityEnabled = 1;
+        parity = ( cflag & PARODD ) ? PARITY_ODD : PARITY_EVEN;
     }
     else
     {
         parity = PARITY_OFF;
-        ParityEnabled = 0;
     }
 
-    // #if DEBUG
-    //     printk ( KERN_INFO "raspicomm: Parity=%i, ParityIsEven = %i", parity, ParityIsEven);
-    // #endif
-    
     // update the configuration
     raspicomm_max3140_configure( baudrate, databits, stopbits, parity );
 }
