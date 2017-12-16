@@ -33,6 +33,19 @@
 // needed for queue_xxx functions
 #include "queue.h"         
 
+// ****************************************************************************
+// **** START Module Defines ****
+// ****************************************************************************
+
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("Martin Furter (mf), mdk");
+MODULE_DESCRIPTION("Raspicomm kernel module with tty driver support for rs-485"
+"\n                https://github.com/Martin-Furter/raspicomm-module/");
+MODULE_SUPPORTED_DEVICE("ttyRPC");
+MODULE_VERSION(RASPICOMM_VERSION);
+
+// ****************************************************************************
+
 // MajorDriverNumber == 0 is using dynamically number
 static const int RaspicommMajorDriverNumber = 0;
 
@@ -563,7 +576,7 @@ static int __init raspicomm_init( void )
     int result;
 
     // log the start of the initialization
-    LOG( "raspicommrs485 init, compiled " COMPILETIME );
+    LOG( "raspicommrs485 init: version " RASPICOMM_VERSION );
 
     LOG( "initializing globals" );
     raspicommDriver = NULL;

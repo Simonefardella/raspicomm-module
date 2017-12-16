@@ -2,70 +2,35 @@ obj-m += raspicommrs485.o
 
 raspicommrs485-objs := module.o queue.o
 
-SRC = /home/mdk/raspicomm-module
-LINUX_3_2_27 = /home/mdk/rpi/linux-rpi-3.2.27/
-LINUX_3_6_11 = /home/mdk/rpi/linux-rpi-3.6.y/
-LINUX_3_6_11_538 = /home/mdk/rpi/linux-rpi-3.6.y-538/
-LINUX_3_10_19_600 = /home/mdk/rpi/linux-rpi-3.10.y/
-LINUX_3_10_24_614 = /home/mdk/rpi/linux-rpi-3.10.24+614/
-LINUX_3_10_25_622 = /home/mdk/rpi/linux-rpi-3.10.25+622/
-LINUX_3_10_38_675 = /home/mdk/rpi/linux-rpi-3.10.38+675/
-LINUX_3_12_22_691 = /home/mdk/rpi/linux-rpi-3.12.22+691/
-LINUX_3_18_7_755 = /home/mdk/rpi/linux-rpi-3.18.7+755/
-LINUX_3_18_7_V7_755 = /home/mdk/rpi/linux-rpi-3.18.7-v7+755/
-LINUX_3_18_11_781 = /home/mdk/rpi/linux-rpi-3.18.11+781/
-LINUX_3_18_11_V7_781 = /home/mdk/rpi/linux-rpi-3.18.11-v7+781/
+RPICOMM_K_VERS=$(shell uname -r)
+RPICOMM_MOD_DIR=/lib/modules/$(RPICOMM_K_VERS)
+RPICOMM_BUILD=$(RPICOMM_MOD_DIR)/build
+RPICOMM_INST=$(RPICOMM_MOD_DIR)/kernel/drivers/tty/serial
+RPICOMM_VERSION=$(shell cat version.txt)
+RPICOMM_DEBUG=$(shell awk '/pre[0-9]*$/{print "-DDEBUG"}' < version.txt)
+RPICOMM_RELEASE=binaries/$(RPICOMM_K_VERS)
 
-PREFIX = /home/mdk/rpi/tools-master/arm-bcm2708/arm-bcm2708-linux-gnueabi/bin/arm-bcm2708-linux-gnueabi-
+FLAGS=-Werror -Wall $(RPICOMM_DEBUG) -DRASPICOMM_VERSION='\"$(RPICOMM_VERSION)\"'
 
-all:
-	$(MAKE) ARCH=arm CROSS_COMPILE=$(PREFIX) -C $(LINUX_3_2_27) M=$(SRC) modules
+all: allmodules binaries/spi0devdis.dtbo
 
-3.2.27+:
-	$(MAKE) ARCH=arm CROSS_COMPILE=$(PREFIX) -C $(LINUX_3_2_27) M=$(SRC) modules
-
-3.6.11+:
-	$(MAKE) ARCH=arm CROSS_COMPILE=$(PREFIX) -C $(LINUX_3_6_11) M=$(SRC) modules
-
-3.6.11+538:
-	$(MAKE) ARCH=arm CROSS_COMPILE=$(PREFIX) -C $(LINUX_3_6_11_538) M=$(SRC) modules
-
-3.10.19+600:
-	$(MAKE) ARCH=arm CROSS_COMPILE=$(PREFIX) -C $(LINUX_3_10_19_600) M=$(SRC) modules
-
-3.10.24+614:
-	$(MAKE) ARCH=arm CROSS_COMPILE=$(PREFIX) -C $(LINUX_3_10_24_614) M=$(SRC) modules
-
-3.10.25+622:
-	$(MAKE) ARCH=arm CROSS_COMPILE=$(PREFIX) -C $(LINUX_3_10_25_622) M=$(SRC) modules
-
-3.10.38+675:
-	$(MAKE) ARCH=arm CROSS_COMPILE=$(PREFIX) -C $(LINUX_3_10_38_675) M=$(SRC) modules
-
-3.12.22+691:
-	$(MAKE) ARCH=arm CROSS_COMPILE=$(PREFIX) -C $(LINUX_3_12_22_691) M=$(SRC) modules
-
-3.18.7+755:
-	make ARCH=arm CROSS_COMPILE=$(PREFIX) -C $(LINUX_3_18_7_755) M=$(SRC) modules
-
-3.18.7-v7+755:
-	make ARCH=arm CROSS_COMPILE=$(PREFIX) -C $(LINUX_3_18_7_V7_755) M=$(SRC) modules
-
-3.18.11+781:
-	make ARCH=arm CROSS_COMPILE=$(PREFIX) -C $(LINUX_3_18_11_781) M=$(SRC) modules
-
-3.18.11-v7+781:
-	make ARCH=arm CROSS_COMPILE=$(PREFIX) -C $(LINUX_3_18_11_V7_781) M=$(SRC) modules
+allmodules:
+	$(MAKE) -C $(RPICOMM_BUILD) M=$(PWD) KCPPFLAGS="$(FLAGS)" modules
 
 clean:
-	$(MAKE) -C $(LINUX_3_2_27) M=$(SRC) clean
-	$(MAKE) -C $(LINUX_3_6_11) M=$(SRC) clean
-	$(MAKE) -C $(LINUX_3_6_11_538) M=$(SRC) clean
-	$(MAKE) -C $(LINUX_3_10_19_600) M=$(SRC) clean
-	$(MAKE) -C $(LINUX_3_10_24_614) M=$(SRC) clean
-	$(MAKE) -C $(LINUX_3_10_25_622) M=$(SRC) clean
-	$(MAKE) -C $(LINUX_3_10_38_675) M=$(SRC) clean
-	$(MAKE) -C $(LINUX_3_12_22_691) M=$(SRC) clean
-	$(MAKE) -C $(LINUX_3_18_7_755) M=$(SRC) clean
-	$(MAKE) -C $(LINUX_3_18_7_V7_755) M=$(SRC) clean
-	$(MAKE) -C $(LINUX_3_18_11_781) M=$(SRC) clean
+	make -C $(RPICOMM_BUILD) M=$(PWD) clean
+
+install: all /boot/overlays/spi0devdis.dtbo $(RPICOMM_INST)/raspicommrs485.ko
+	if [ -z "$(DEBUG)" ]; then mkdir -p $(RPICOMM_RELEASE) && cp -pf raspicommrs485.ko $(RPICOMM_RELEASE)/ ; fi
+
+$(RPICOMM_INST)/raspicommrs485.ko: raspicommrs485.ko
+	sudo cp raspicommrs485.ko $(RPICOMM_INST)
+	sudo depmod -a
+
+binaries/spi0devdis.dtbo: spi0devdis.dts
+	dtc -@ -I dts -O dtb -o binaries/spi0devdis.dtbo spi0devdis.dts
+
+/boot/overlays/spi0devdis.dtbo: binaries/spi0devdis.dtbo
+	sudo cp binaries/spi0devdis.dtbo /boot/overlays/spi0devdis.dtbo
+	# echo "dtoverlay=spi0devdis" >> /boot/config.txt
+
