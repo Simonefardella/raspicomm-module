@@ -800,11 +800,15 @@ static void raspicomm_max3140_configure( speed_t speed,
     spin_lock_bh( &dev_lock );
     config |= UartConfig &
                 (MAX3140_BLOCK_COMMUNICATION | MAX3140_CFG_ENABLE_TX_INT);
-    UartConfig = config;
-    OneCharDelay = delay;
-    ParityEnabled = parity != PARITY_OFF;
-    ParityIsOdd = parity == PARITY_ODD;
-    rpc_spi_msg_async( &configure_uart, UartConfig );
+    if( UartConfig != config )
+    {
+        // update the uart only if the config changed
+        UartConfig = config;
+        OneCharDelay = delay;
+        ParityEnabled = parity != PARITY_OFF;
+        ParityIsOdd = parity == PARITY_ODD;
+        rpc_spi_msg_async( &configure_uart, UartConfig );
+    }
     spin_unlock_bh( &dev_lock ); 
 }
 
