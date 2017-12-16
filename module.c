@@ -528,6 +528,11 @@ static void raspicomm_cleanup( void )
         LOG( "free_irq" );
         free_irq( irqNumber, NULL );
     }
+    // cancel the timer
+    if( last_byte_sent_timer_initialized )
+    {
+        hrtimer_cancel( &last_byte_sent_timer );
+    }
 
     // how do i wait for all SPI transfers to finish?
     // maybe try with a delay (mf) ++++
@@ -535,10 +540,6 @@ static void raspicomm_cleanup( void )
     msleep( 10 );
 
     // do all the remaining cleanup...
-    if( last_byte_sent_timer_initialized )
-    {
-        hrtimer_cancel( &last_byte_sent_timer );
-    }
     if( raspicommDriver )
     {
         LOG( "tty_unregister_driver" );
@@ -576,7 +577,7 @@ static int __init raspicomm_init( void )
     int result;
 
     // log the start of the initialization
-    LOG( "raspicommrs485 init: version " RASPICOMM_VERSION );
+    LOG_INFO( "raspicommrs485 init: version " RASPICOMM_VERSION );
 
     LOG( "initializing globals" );
     raspicommDriver = NULL;
@@ -596,14 +597,14 @@ static int __init raspicomm_init( void )
     master = spi_busnum_to_master( 0 );
     if( !master )
     {
-        printk( KERN_ERR "spi_busnum_to_master failed" );
+        LOG_ERR( "spi_busnum_to_master failed" );
         goto cleanup;
     }
     LOG( "spi_new_device" );
     spi_slave = spi_new_device( master, &spi_device_info );
     if( !spi_slave )
     {
-        printk( KERN_ERR "spi_new_device failed" );
+        LOG_ERR( "spi_new_device failed" );
         goto cleanup;
     }
 
@@ -612,7 +613,7 @@ static int __init raspicomm_init( void )
     result = gpio_request( pin, "rpc0irq" );
     if( result < 0 )
     {
-        printk( KERN_ERR "gpio_request failed with code %d", result );
+        LOG_ERR( "gpio_request failed with code %d", result );
         goto cleanup;
     }
     irqGPIO = pin;
@@ -622,7 +623,7 @@ static int __init raspicomm_init( void )
     result = gpio_direction_input( irqGPIO );
     if( result < 0 )
     {
-        printk( KERN_ERR "gpio_direction_input failed with code %d", result );
+        LOG_ERR( "gpio_direction_input failed with code %d", result );
         goto cleanup;
     }
     
@@ -631,7 +632,7 @@ static int __init raspicomm_init( void )
     irqNumber = gpio_to_irq( irqGPIO );
     if( irqNumber < 0 )
     {
-        printk( KERN_ERR "gpio_to_irq failed with code %d", result );
+        LOG_ERR( "gpio_to_irq failed with code %d", result );
         goto cleanup;
     }
     // requested interrupt
@@ -645,7 +646,7 @@ static int __init raspicomm_init( void )
                         NULL );                             
     if( result < 0 )
     {
-        printk( KERN_ERR "request_irq failed with code %d", result );
+        LOG_ERR( "request_irq failed with code %d", result );
         goto cleanup;
     }
 
@@ -661,7 +662,7 @@ static int __init raspicomm_init( void )
     // return if allocation fails
     if( IS_ERR( raspicommDriver ) )
     {
-        printk( KERN_ERR "tty_alloc_driver failed" );
+        LOG_ERR( "tty_alloc_driver failed" );
         goto cleanup;
     }
 
@@ -692,7 +693,7 @@ static int __init raspicomm_init( void )
     LOG( "tty_register_driver" );
     if( tty_register_driver( raspicommDriver ) )
     {
-        printk( KERN_ERR "tty_register_driver failed" );
+        LOG_ERR( "tty_register_driver failed" );
         goto cleanup;
     }
 
@@ -717,20 +718,21 @@ static int __init raspicomm_init( void )
     spin_lock_bh( &dev_lock );
     UartConfig &= ~MAX3140_BLOCK_COMMUNICATION;
     spin_unlock_bh( &dev_lock ); 
-    LOG( "raspicomm_init() completed" );
+    LOG_INFO( "raspicomm_init() completed" );
     return 0; 
 
 cleanup:
     raspicomm_cleanup();
+    LOG_ERR( "raspicomm_init() failed" );
     return -ENODEV;
 }
 
 // cleanup function that gets called when the module is unloaded
 static void __exit raspicomm_exit( void )
 {
-    LOG( "raspicomm_exit() called" );
+    LOG_INFO( "raspicomm_exit() called" );
     raspicomm_cleanup();
-    LOG( "kernel module exit" );
+    LOG_INFO( "kernel module exit" );
 }
 
 
@@ -1081,12 +1083,12 @@ static int raspicommDriver_ioctl( struct tty_struct* tty,
 
 static void raspicommDriver_throttle( struct tty_struct * tty )
 {
-    LOG_INFO( "throttle" );
+    LOG( "throttle" );
 }
 
 static void raspicommDriver_unthrottle( struct tty_struct * tty )
 {
-    LOG_INFO( "unthrottle" );
+    LOG( "unthrottle" );
 }
 
 

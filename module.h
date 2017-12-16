@@ -20,3 +20,7 @@
 
 /* log maps always to printk */
 #define LOG_INFO(fmt, args...) do { printk( KERN_INFO "rpc" ": " fmt "\n", ## args); } while(0)
+
+/* log maps always to printk */
+#define LOG_ERR(fmt, args...) do { printk( KERN_ERR "rpc" ": " fmt "\n", ## args); } while(0)
+
