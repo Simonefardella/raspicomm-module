@@ -425,7 +425,7 @@ static void start_transmitting_done( void* context )
         // data is available in the receive register
         // handle the received data
         raspicomm_rs485_received( OpenTTY, rxdata );
-        LOG( "irq_msg_read_done recv: 0x%X", rxdata );
+        LOG( "start_transmitting_done recv: 0x%X", rxdata );
     }
 }
 
@@ -688,7 +688,10 @@ static int __init raspicomm_init( void )
     raspicommDriver->init_termios           = tty_std_termios;
     raspicommDriver->init_termios.c_ispeed  = 9600;
     raspicommDriver->init_termios.c_ospeed  = 9600;
+    raspicommDriver->init_termios.c_iflag   = 0;
+    raspicommDriver->init_termios.c_oflag   = 0;
     raspicommDriver->init_termios.c_cflag   = B9600 | CREAD | CS8 | CLOCAL;
+    raspicommDriver->init_termios.c_lflag   = 0;
 
     // initialize function callbacks of tty_driver,
     // necessary before tty_register_driver()
@@ -1078,14 +1081,12 @@ static int raspicommDriver_ioctl( struct tty_struct* tty,
 {
     int ret;
 
-    LOG( "raspicommDriver_ioctl() called with cmd=%i, arg=%li", cmd, arg );
+    LOG( "raspicommDriver_ioctl() called with cmd=%X, arg=%lX", cmd, arg );
     switch( cmd )
     {
         case TIOCMSET:
-            ret = 0;
-            break;
-
         case TIOCMGET:
+            // ioctl to get and set DTR, DSR, RTS, CTS, etc...
             ret = 0;
             break;
 
