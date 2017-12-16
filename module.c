@@ -260,6 +260,7 @@ static unsigned int irqNumber;
 
 static rpc_spi_msg2_t start_transmitting;
 static rpc_spi_msg_t irq_msg_read;
+static rpc_spi_msg_t irq_msg_read2;
 static rpc_spi_msg_t irq_msg_write;
 static rpc_spi_msg_t stop_transmitting;
 static rpc_spi_msg_t configure_uart;
@@ -431,7 +432,7 @@ static void start_transmitting_done( void* context )
 
 static void irq_msg_read_done( void* context )
 {
-    int rxdata, txdata, rc;
+    int rxdata, txdata, rc, irqstate = 1;
 
     LOG( "irq_msg_read_done" );
     rxdata = rpc_spi_msg_rx( context );
@@ -440,42 +441,49 @@ static void irq_msg_read_done( void* context )
         // data is available in the receive register
         // handle the received data
         raspicomm_rs485_received( OpenTTY, rxdata );
-        LOG( "irq_msg_read_done recv: 0x%X", rxdata );
+        irqstate = gpio_get_value( irqGPIO );
+        LOG( "irq_msg_read_done recv: 0x%X irq=%d", rxdata, irqstate );
     }
-    if( (rxdata & MAX3140_TRANSMIT_BUF_EMPTY) == 0 )
+    if( rxdata & MAX3140_TRANSMIT_BUF_EMPTY )
     {
-        // no space in the transmit buffer
-        return;
-    }
-    spin_lock_bh( &dev_lock );
-    if( UartConfig & MAX3140_CFG_ENABLE_TX_INT )
-    {
-        // transmit interrupt is on, this means we have to check the queue
-        rc = queue_dequeue( &TxQueue, &txdata );
-        if( rc )
+        // there is space in the transmit buffer
+        spin_lock_bh( &dev_lock );
+        if( UartConfig & MAX3140_CFG_ENABLE_TX_INT )
         {
-            txdata = max3140_make_write_data_cmd( txdata );
+            // transmit interrupt is on, this means we have to check the queue
+            rc = queue_dequeue( &TxQueue, &txdata );
+            if( rc )
+            {
+                txdata = max3140_make_write_data_cmd( txdata );
+                irqstate = 1;
+            }
+            else
+            {
+                // no more data to send, disable transmit interrupt
+                UartConfig &= ~MAX3140_CFG_ENABLE_TX_INT;
+                txdata = UartConfig;
+            }
+            rpc_spi_msg_async( &irq_msg_write, txdata );
         }
         else
         {
-            // no more data to send, disable transmit interrupt
-            UartConfig &= ~MAX3140_CFG_ENABLE_TX_INT;
-            txdata = UartConfig;
+            // transmit interrupt is off, nothing to do
+            // prevent timer from starting
+            rc = 1;
         }
-        rpc_spi_msg_async( &irq_msg_write, txdata );
+        spin_unlock_bh( &dev_lock ); 
+        if( !rc )
+        {
+            // after the last byte has been sent the transmission is finished
+            LOG( "start HR timer last_byte_sent_timer" );
+            hrtimer_start( &last_byte_sent_timer, OneCharDelay,
+                        HRTIMER_MODE_REL );
+        }
     }
-    else
+    if( !irqstate )
     {
-        // transmit interrupt is off, nothing to do
-        // prevent timer from starting
-        rc = 1;
-    }
-    spin_unlock_bh( &dev_lock ); 
-    if( !rc )
-    {
-        // after the last byte has been sent the transmission is finished
-        LOG( "start HR timer last_byte_sent_timer" );
-        hrtimer_start( &last_byte_sent_timer, OneCharDelay, HRTIMER_MODE_REL );
+        // irq pin is still low, read again
+        rpc_spi_msg_async( &irq_msg_read2, MAX3140_CMD_READ_DATA );
     }
 }
 
@@ -714,6 +722,7 @@ static int __init raspicomm_init( void )
     rpc_spi_msg2_init( &start_transmitting, start_transmitting_done,
             "start_transmitting" );
     rpc_spi_msg_init( &irq_msg_read, irq_msg_read_done, "irq_msg_read" );
+    rpc_spi_msg_init( &irq_msg_read2, irq_msg_read_done, "irq_msg_read" );
     rpc_spi_msg_init( &irq_msg_write, irq_msg_write_done, "irq_msg_write" );
     rpc_spi_msg_init( &stop_transmitting, stop_transmitting_done,
             "stop_transmitting" );
