@@ -1,4 +1,12 @@
 // vim: et:ts=4:sw=4:smarttab
+/*
+
+RS485 Driver for the RaspiComm Module.
+
+This version uses the linux SPI module to interface with the UART.
+Under load the reaction time is sometimes too long and the driver locks up.
+
+*/
 
 // Needed by all modules
 #include <linux/module.h>         
