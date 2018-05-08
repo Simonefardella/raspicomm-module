@@ -22,7 +22,7 @@ int queue_is_empty(queue_t* queue)
   return (queue->write == queue->read);
 }
 
-int queue_enqueue(queue_t* queue, int item)
+int queue_enqueue(queue_t* queue, QUEUE_ITEM item)
 {
   if (queue_is_full(queue)) {
     return 0;
@@ -34,7 +34,7 @@ int queue_enqueue(queue_t* queue, int item)
   }
 }
 
-int queue_dequeue(queue_t* queue, int* item)
+int queue_dequeue(queue_t* queue, QUEUE_ITEM* item)
 {
   if (queue_is_empty(queue)) {
     return 0;
