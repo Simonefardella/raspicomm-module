@@ -5,12 +5,14 @@ RS485 Driver for the RaspiComm Module.
 
 Latest incarnation hijacking the SPI chip to get fast response times.
 The Linux SPI driver responds too slow to handle the MAX3140 at 115200,
-it would be nice if the callbacks could come directly from SPI interrupt.
-
+especially under load the responset time is way too long. It would be nice
+if in the SPI code could be specified that the callbacks should come
+directly from SPI interrupt.
 
 
 RaspiComm to Raspberry Pi Connection:
 https://amesberger.files.wordpress.com/2012/08/rasppicomm-to-rasberrypi-connector.jpg
+https://pinout.xyz/pinout/spi#
 
 MAX3140 INT    GPIO17   pin 11
 MAX3140 SCK    GPIO11   pin 23  SPI0 SCK
@@ -401,16 +403,6 @@ static const struct tty_operations raspicomm_ops = {
 
 #define LOG_MSG_DETAILS
 #ifdef LOG_MSG_DETAILS
-#if 0
-static void log_max3140_message( unsigned char* txbuf, unsigned char* rxbuf )
-{
-	int tx;
-	int rx;
-	char buffer[256];
-
-	tx = (txbuf[0] << 8) | txbuf[1];
-	rx = (rxbuf[0] << 8) | rxbuf[1];
-#endif
 static void log_max3140_message( int tx, int rx )
 {
 	char buffer[256];
@@ -467,7 +459,6 @@ static void log_max3140_message( int tx, int rx )
 #define log_max3140_message(a,b) do{}while(0)
 #endif
 
-#if 1
 static void start_transmitting_done( uint16_t send_data, uint16_t recv_data )
 {
 	LOG( "start_transmitting_done" );
@@ -480,14 +471,11 @@ static void start_transmitting_done( uint16_t send_data, uint16_t recv_data )
 		LOG( "start_transmitting_done recv: 0x%X", recv_data );
 	}
 }
-#endif
 
-#if 1
 static void start_transmitting_done2( uint16_t send_data, uint16_t recv_data )
 {
 	LOG( "start_transmitting_done2" );
 }
-#endif
 
 static void irq_msg_write_done( uint16_t send_data, uint16_t recv_data )
 {
@@ -556,18 +544,6 @@ static void irq_msg_read_done( uint16_t send_data, uint16_t recv_data )
 	}
 }
 
-#if 0
-static void start_transmitting_done2( uint16_t send_data, uint16_t recv_data )
-{
-	LOG( "start_transmitting_done2" );
-	if( recv_data & MAX3140_TRANSMIT_BUF_EMPTY )
-	{
-		// fill the 'FIFO'
-		irq_msg_read_done( send_data & ~MAX3140_RECEIVE_BUFFER_FULL, recv_data );
-	}
-}
-#endif
-
 static void stop_transmitting_done( uint16_t send_data, uint16_t recv_data )
 {
 	LOG( "stop_transmitting_done" );
@@ -581,17 +557,9 @@ static enum hrtimer_restart last_byte_sent( struct hrtimer *timer )
 	return HRTIMER_NORESTART;
 }
 
-#if 0
-static void test_loop( uint16_t send_data, uint16_t recv_data )
-{
-	rpc_spi_transfer_word( MAX3140_CMD_READ_DATA, test_loop );
-}
-#endif
-
 static void configure_uart_done( uint16_t send_data, uint16_t recv_data )
 {
 	LOG( "configure_uart_done" );
-	// test_loop( 0, 0 );
 	// nothing to do here
 }
 
@@ -932,7 +900,6 @@ static int rpc_tty_open( struct tty_struct* tty, struct file* file )
 {
 	LOG( "rpc_tty_open() called" );
 
-	// if( rcd.tty_open_count++ )
 	if( rcd.tty_open_count )
 	{
 		LOG( "rpc_tty_open() was not successful as rcd.tty_open_count = %i",
@@ -945,12 +912,8 @@ static int rpc_tty_open( struct tty_struct* tty, struct file* file )
 		LOG( "rpc_tty_open() was successful" );
 
 		rcd.tty_open = tty;
-		// rcd.tty_open->driver_data = rcd;
 		rcd.tty_open_count++;
 
-//	rpc_spi_transfer_word( MAX3140_CMD_READ_DATA, 0 );
-
-//	rpc_spi_transfer_word( MAX3140_CMD_READ_DATA, irq_msg_read_done );
 		return SUCCESS;
 	}
 }
@@ -967,7 +930,6 @@ static void rpc_tty_close( struct tty_struct* tty, struct file* file )
 	{
 		// rcd.tty_open->driver_data = NULL;
 		rcd.tty_open = NULL;
-	rpc_spi_transfer_word( MAX3140_CMD_READ_DATA, irq_msg_read_done );
 		LOG( "device was closed" );
 	}
 }
@@ -1178,11 +1140,6 @@ static void rpc_tty_unthrottle( struct tty_struct * tty )
 {
 	LOG( "unthrottle" );
 }
-
-
-// ****************************************************************************
-// **** END raspicommDriver interface functions ****
-// ****************************************************************************
 
 // }}} TTY Interface Functions
 //============================================================================
