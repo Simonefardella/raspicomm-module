@@ -19,6 +19,9 @@ MAX3140 MISO   GPIO9    pin 21  SPI0 MISO
 MAX3140 CE     GPIO8    pin 24  SPI0 CE0
 
 
+Overlays needed:
+  spi0-hw-cs
+
 */
 //============================================================================
 // {{{ includes
@@ -464,6 +467,7 @@ static void log_max3140_message( int tx, int rx )
 #define log_max3140_message(a,b) do{}while(0)
 #endif
 
+#if 1
 static void start_transmitting_done( uint16_t send_data, uint16_t recv_data )
 {
 	LOG( "start_transmitting_done" );
@@ -476,11 +480,14 @@ static void start_transmitting_done( uint16_t send_data, uint16_t recv_data )
 		LOG( "start_transmitting_done recv: 0x%X", recv_data );
 	}
 }
+#endif
 
+#if 1
 static void start_transmitting_done2( uint16_t send_data, uint16_t recv_data )
 {
 	LOG( "start_transmitting_done2" );
 }
+#endif
 
 static void irq_msg_write_done( uint16_t send_data, uint16_t recv_data )
 {
@@ -525,7 +532,6 @@ static void irq_msg_read_done( uint16_t send_data, uint16_t recv_data )
 				rcd.UartConfig &= ~MAX3140_CFG_ENABLE_TX_INT;
 				send_data = rcd.UartConfig;
 			}
-			// rpc_spi_msg_async( &irq_msg_write, txdata );
 			rpc_spi_transfer_word( send_data, irq_msg_write_done );
 		}
 		else
@@ -546,10 +552,21 @@ static void irq_msg_read_done( uint16_t send_data, uint16_t recv_data )
 	if( !irqstate )
 	{
 		// irq pin is still low, read again
-		// rpc_spi_msg_async( &irq_msg_read2, MAX3140_CMD_READ_DATA );
 		rpc_spi_transfer_word( MAX3140_CMD_READ_DATA, irq_msg_read_done );
 	}
 }
+
+#if 0
+static void start_transmitting_done2( uint16_t send_data, uint16_t recv_data )
+{
+	LOG( "start_transmitting_done2" );
+	if( recv_data & MAX3140_TRANSMIT_BUF_EMPTY )
+	{
+		// fill the 'FIFO'
+		irq_msg_read_done( send_data & ~MAX3140_RECEIVE_BUFFER_FULL, recv_data );
+	}
+}
+#endif
 
 static void stop_transmitting_done( uint16_t send_data, uint16_t recv_data )
 {
@@ -560,7 +577,6 @@ static void stop_transmitting_done( uint16_t send_data, uint16_t recv_data )
 static enum hrtimer_restart last_byte_sent( struct hrtimer *timer )
 {
 	LOG( "last_byte_sent" );
-	// rpc_spi_msg_async( &stop_transmitting, MAX3140_CMD_RECEIVE_MODE );
 	rpc_spi_transfer_word( MAX3140_CMD_RECEIVE_MODE, stop_transmitting_done );
 	return HRTIMER_NORESTART;
 }
@@ -770,9 +786,8 @@ static int rpc_tty_init( struct platform_device* pdev )
 	rcd.last_byte_sent_timer_initialized = 1;
 
 	// now configure the UART
-	// rpc_spi_msg_async( &stop_transmitting, MAX3140_CMD_RECEIVE_MODE );
 	rpc_spi_transfer_word( MAX3140_CMD_RECEIVE_MODE, stop_transmitting_done );
-//	rpc_max3140_configure( 9600, DATABITS_8, STOPBITS_ONE, PARITY_OFF );
+	rpc_max3140_configure( 9600, DATABITS_8, STOPBITS_ONE, PARITY_OFF );
 
 	// successfully initialized the module
 	spin_lock_irqsave( &rcd.dev_lock, spinlock_flags );
@@ -858,7 +873,6 @@ static void rpc_max3140_configure( speed_t speed,
 		rcd.OneCharDelay = delay;
 		rcd.ParityEnabled = parity != PARITY_OFF;
 		rcd.ParityIsOdd = parity == PARITY_ODD;
-		// rpc_spi_msg_async( &configure_uart, UartConfig );
 		rpc_spi_transfer_word( rcd.UartConfig, configure_uart_done );
 	}
 	spin_unlock_irqrestore( &rcd.dev_lock, spinlock_flags );
@@ -887,7 +901,6 @@ static int rpc_max3140_make_write_data_cmd( int data )
 static irqreturn_t raspicomm_irq_handler( int irq, void* dev_id )
 {
 	LOG( "raspicomm_irq_handler" );
-	// rpc_spi_msg_async( &irq_msg_read, MAX3140_CMD_READ_DATA );
 	rpc_spi_transfer_word( MAX3140_CMD_READ_DATA, irq_msg_read_done );
 	return IRQ_HANDLED;
 }
@@ -935,8 +948,9 @@ static int rpc_tty_open( struct tty_struct* tty, struct file* file )
 		// rcd.tty_open->driver_data = rcd;
 		rcd.tty_open_count++;
 
-	rpc_spi_transfer_word( MAX3140_CMD_READ_DATA, 0 );
+//	rpc_spi_transfer_word( MAX3140_CMD_READ_DATA, 0 );
 
+//	rpc_spi_transfer_word( MAX3140_CMD_READ_DATA, irq_msg_read_done );
 		return SUCCESS;
 	}
 }
@@ -945,11 +959,6 @@ static int rpc_tty_open( struct tty_struct* tty, struct file* file )
 static void rpc_tty_close( struct tty_struct* tty, struct file* file )
 {
 	LOG( "rpc_tty_close called" );
-	/* -------
-	rpc_spi_transfer_word( MAX3140_CMD_READ_DATA, irq_msg_read_done );
-	rpc_spi_transfer_word( MAX3140_CMD_READ_CONFIG, irq_msg_read_done );
-	*/
-
 	if( --rcd.tty_open_count )
 	{
 		LOG( "device was not closed, as an open count is %i", rcd.tty_open_count );
@@ -958,6 +967,7 @@ static void rpc_tty_close( struct tty_struct* tty, struct file* file )
 	{
 		// rcd.tty_open->driver_data = NULL;
 		rcd.tty_open = NULL;
+	rpc_spi_transfer_word( MAX3140_CMD_READ_DATA, irq_msg_read_done );
 		LOG( "device was closed" );
 	}
 }
@@ -991,8 +1001,9 @@ static int rpc_tty_write( struct tty_struct* tty,
 			data = rpc_max3140_make_write_data_cmd( buf[0] );
 			rcd.UartConfig |= MAX3140_CFG_ENABLE_TX_INT;
 			// rpc_spi_msg2_async( &start_transmitting, data, UartConfig );
-			rpc_spi_transfer_word( data, start_transmitting_done );
+			// rpc_spi_transfer_word( data, start_transmitting_done );
 			rpc_spi_transfer_word( rcd.UartConfig, start_transmitting_done2 );
+			rpc_spi_transfer_word( data, start_transmitting_done );
 			rc++;
 			// cancel a pending EOT
 			hrtimer_cancel( &rcd.last_byte_sent_timer );
@@ -1319,14 +1330,14 @@ static irqreturn_t rpc_spi_interrupt( int irq, void *dev_id )
 				rcd.transfer_count*sizeof(*rcd.transfers) );
 	}
 	spin_unlock_irqrestore( &rcd.spi_lock, spinlock_flags );
-#if 1
+#if 0
 	{
 		unsigned int x = rpc_spi_read_reg( BCM2835_SPI_CS );
 		LOG( "SPI IRQ: %08X done=%d", x, (x&BCM2835_SPI_CS_DONE) != 0 );
 	}
 #endif
 	rpc_spi_write_reg( BCM2835_SPI_CS, SPI_CS_DONE );
-#if 1
+#if 0
 	{
 		unsigned int x = rpc_spi_read_reg( BCM2835_SPI_CS );
 		LOG( "SPI IRQ: %08X done=%d", x, (x&BCM2835_SPI_CS_DONE) != 0 );
@@ -1350,9 +1361,9 @@ static irqreturn_t rpc_spi_interrupt( int irq, void *dev_id )
 	rpc_spi_write_reg( BCM2835_SPI_CS, SPI_CS_DONE );
 		udelay( 1 );
 		rpc_spi_write_reg( BCM2835_SPI_CS, SPI_CS_RESET	);
-#endif
 	rpc_spi_write_reg( BCM2835_SPI_CS, SPI_CS_RESET );
 	rpc_spi_write_reg( BCM2835_SPI_DLEN, 0 );
+#endif
 	if( read_err == 0 )
 	{
 		// LOG( "pc_spi_interrupt: received %04X", t.recv_data );
