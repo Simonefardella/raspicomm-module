@@ -8,6 +8,7 @@ This is a heavily modifed version of the original raspicomm module modified for 
  * Make and install the module: `make install`
  * Edit /boot/config.txt and add the lines `dtparam=spi=on` and `dtoverlay=spi0-hw-cs` to the end.
  * Edit `/etc/modules` and append `raspicommrs485` to the end of the file
+ * Remove the original SPI modules: `mkdir /root/spi-modules-orig && mv /lib/modules/4.9.59-v7+/kernel/drivers/spi/* /root/spi-modules-orig` 
  * Run: `depmod -a`
  * Run: `modprobe raspicommrs485`
  * Restart your Pi! (`shutdown -r now`)
