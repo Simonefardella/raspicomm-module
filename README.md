@@ -5,7 +5,7 @@ This is a heavily modifed version of the original raspicomm module modified for 
 
 ## Installation Instructions
 
- * Make and install the module (+++ document this)
+ * Make and install the module: `make install`
  * Edit /boot/config.txt and add the lines `dtparam=spi=on` and `dtoverlay=spi0-hw-cs` to the end.
  * Edit `/etc/modules` and append `raspicommrs485` to the end of the file
  * Run: `depmod -a`
