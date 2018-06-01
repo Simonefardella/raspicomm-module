@@ -401,9 +401,7 @@ static const struct tty_operations raspicomm_ops = {
 //============================================================================
 // {{{ spi functions
 
-#define LOG_MSG_DETAILS
-#ifdef LOG_MSG_DETAILS
-static void log_max3140_message( int tx, int rx )
+static void log_max3140_message( int tx, int rx, int err )
 {
 	char buffer[256];
 
@@ -453,11 +451,15 @@ static void log_max3140_message( int tx, int rx )
 				(rx>>15)&1, (rx>>14)&1 );
 			break;
 	}
-	LOG( "%s", buffer );
+	if( err )
+	{
+		LOG_ERR( "%s", buffer );
+	}
+	else
+	{
+		LOG( "%s", buffer );
+	}
 }
-#else
-#define log_max3140_message(a,b) do{}while(0)
-#endif
 
 static void start_transmitting_done( uint16_t send_data, uint16_t recv_data )
 {
@@ -1267,6 +1269,14 @@ static bool rpc_spi_start_transfer(void)
 
 /* SPI interrupt function called when a transfer is complete.
  */
+/*
+
+[10684.354768] rpc: rpc_tty_open() was successful
+[11069.285374] rpc: rpc_spi_interrupt: error reading FIFO (11)
+[11069.285403] rpc: WrCfg CC0B FEN=0 SHDN=0 TM=1 RM=1 PM=0 RAM=0 IR=0 ST=0 PE=0 L=0 BR=B -- FFFFFFFF R=1 T=1
+[11171.858334] rpc: rpc_tty_close: device was closed
+
+*/
 static irqreturn_t rpc_spi_interrupt( int irq, void *dev_id )
 {
 	unsigned long spinlock_flags;
@@ -1323,7 +1333,9 @@ static irqreturn_t rpc_spi_interrupt( int irq, void *dev_id )
 	if( read_err == 0 )
 	{
 		// LOG( "pc_spi_interrupt: received %04X", t.recv_data );
-		log_max3140_message( t.send_data, t.recv_data );
+#ifdef DEBUG
+		log_max3140_message( t.send_data, t.recv_data, 0 );
+#endif
 		if( t.callback )
 		{
 			t.callback( t.send_data, t.recv_data );
@@ -1333,6 +1345,8 @@ static irqreturn_t rpc_spi_interrupt( int irq, void *dev_id )
 	else
 	{
 		LOG_ERR( "rpc_spi_interrupt: error reading FIFO (%02X)", read_err );
+		log_max3140_message( t.send_data, -1, 1 );
+		rpc_spi_write_reg( BCM2835_SPI_CS, SPI_CS_RESET );
 	}
 	if( more )
 	{
