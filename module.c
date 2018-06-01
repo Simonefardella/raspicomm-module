@@ -312,7 +312,7 @@ typedef struct {
 	struct tty_struct* tty_open;
 
 	// the number of open() calls
-	int tty_open_count;
+	int tty_opened;
 
 	// ParityIsOdd == true ? odd : even
 	int ParityIsOdd;
@@ -900,11 +900,9 @@ static int rpc_tty_open( struct tty_struct* tty, struct file* file )
 {
 	LOG( "rpc_tty_open() called" );
 
-	if( rcd.tty_open_count )
+	if( rcd.tty_opened )
 	{
-		LOG( "rpc_tty_open() was not successful as rcd.tty_open_count = %i",
-					rcd.tty_open_count );
-
+		LOG( "rpc_tty_open() was not successful as rcd.tty_opened != 0" );
 		return -ENODEV;
 	}
 	else
@@ -912,7 +910,7 @@ static int rpc_tty_open( struct tty_struct* tty, struct file* file )
 		LOG( "rpc_tty_open() was successful" );
 
 		rcd.tty_open = tty;
-		rcd.tty_open_count++;
+		rcd.tty_opened = 1;
 
 		return SUCCESS;
 	}
@@ -922,14 +920,15 @@ static int rpc_tty_open( struct tty_struct* tty, struct file* file )
 static void rpc_tty_close( struct tty_struct* tty, struct file* file )
 {
 	LOG( "rpc_tty_close called" );
-	if( --rcd.tty_open_count )
+	if( !rcd.tty_opened )
 	{
-		LOG( "device was not closed, as an open count is %i", rcd.tty_open_count );
+		LOG( "can't close device since it is already closed" );
 	}
 	else
 	{
 		// rcd.tty_open->driver_data = NULL;
 		rcd.tty_open = NULL;
+		rcd.tty_opened = 0;
 		LOG( "device was closed" );
 	}
 }
