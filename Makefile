@@ -12,7 +12,8 @@ RPICOMM_RELEASE=binaries/$(RPICOMM_K_VERS)
 
 FLAGS=-Werror -Wall $(RPICOMM_DEBUG) -DRASPICOMM_VERSION='\"$(RPICOMM_VERSION)\"'
 
-all: allmodules binaries/spi0devdis.dtbo
+# all: allmodules binaries/spi0devdis.dtbo
+all: allmodules
 
 allmodules:
 	$(MAKE) -C $(RPICOMM_BUILD) M=$(PWD) KCPPFLAGS="$(FLAGS)" modules
@@ -20,7 +21,8 @@ allmodules:
 clean:
 	make -C $(RPICOMM_BUILD) M=$(PWD) clean
 
-install: all /boot/overlays/spi0devdis.dtbo $(RPICOMM_INST)/raspicommrs485.ko
+# install: all /boot/overlays/spi0devdis.dtbo $(RPICOMM_INST)/raspicommrs485.ko
+install: all $(RPICOMM_INST)/raspicommrs485.ko
 	if [ -z "$(DEBUG)" ]; then mkdir -p $(RPICOMM_RELEASE) && cp -pf raspicommrs485.ko $(RPICOMM_RELEASE)/ ; fi
 
 $(RPICOMM_INST)/raspicommrs485.ko: raspicommrs485.ko
