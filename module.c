@@ -645,7 +645,7 @@ static int rpc_tty_init( struct platform_device* pdev )
 
 	if( of_gpio_named_count( np, "cs-gpios" ) < 1 )
 	{
-		LOG( "of_gpio_named_count(cs-gpios) failed" );
+		LOG_ERR( "of_gpio_named_count(cs-gpios) failed" );
 		return -ENOENT;
 	}
 	cs[i] = of_get_named_gpio( np, "cs-gpios", 1 );
@@ -902,12 +902,12 @@ static int rpc_tty_open( struct tty_struct* tty, struct file* file )
 
 	if( rcd.tty_opened )
 	{
-		LOG( "rpc_tty_open() was not successful as rcd.tty_opened != 0" );
+		LOG_ERR( "rpc_tty_open() was not successful as rcd.tty_opened != 0" );
 		return -ENODEV;
 	}
 	else
 	{
-		LOG( "rpc_tty_open() was successful" );
+		LOG_INFO( "rpc_tty_open() was successful" );
 
 		rcd.tty_open = tty;
 		rcd.tty_opened = 1;
@@ -922,14 +922,14 @@ static void rpc_tty_close( struct tty_struct* tty, struct file* file )
 	LOG( "rpc_tty_close called" );
 	if( !rcd.tty_opened )
 	{
-		LOG( "can't close device since it is already closed" );
+		LOG_ERR( "rpc_tty_close: can't close device since it is already closed" );
 	}
 	else
 	{
 		// rcd.tty_open->driver_data = NULL;
 		rcd.tty_open = NULL;
 		rcd.tty_opened = 0;
-		LOG( "device was closed" );
+		LOG_INFO( "rpc_tty_close: device was closed" );
 	}
 }
 
@@ -1247,14 +1247,14 @@ static bool rpc_spi_start_transfer(void)
 			// writing to FIFO failed
 			rc = false;
 			rpc_spi_reset();
-			LOG( "rpc_spi_start_transfer: writing byte 1 FIFO failed" );
+			LOG_ERR( "rpc_spi_start_transfer: writing byte 1 FIFO failed" );
 		}
 		else if( !rpc_spi_write_fifo( data ) )
 		{
 			// writing to FIFO failed
 			rc = false;
 			rpc_spi_reset();
-			LOG( "rpc_spi_start_transfer: writing byte 2 FIFO failed" );
+			LOG_ERR( "rpc_spi_start_transfer: writing byte 2 FIFO failed" );
 		}
 		else
 		{
@@ -1332,7 +1332,7 @@ static irqreturn_t rpc_spi_interrupt( int irq, void *dev_id )
 	}
 	else
 	{
-		LOG( "rpc_spi_interrupt: error reading FIFO (%02X)", read_err );
+		LOG_ERR( "rpc_spi_interrupt: error reading FIFO (%02X)", read_err );
 	}
 	if( more )
 	{
