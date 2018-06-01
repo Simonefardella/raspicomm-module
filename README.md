@@ -17,3 +17,7 @@ Tip:
  * You'll likely need superuser priviliges to run some of the above commands. `sudo` is your friend.
  * Never blindly follow command line instructions from the internet. Always double check ;)
 
+## Binaries
+
+ * [raspicommrs485.ko for kernel 4.14.34-v7+ (md5sum 9371e7f9a4fbc2d0cce159b7334ba57d)](https://github.com/Martin-Furter/raspicomm-module/raw/master/binaries/4.14.34-v7%2B/raspicommrs485.ko)
+
