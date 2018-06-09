@@ -296,6 +296,7 @@ typedef struct {
 	struct clk *clk;
 	int spi_irq;
 	rpc_spi_transfer_t transfers[MAX_TRANSFER_COUNT];
+	bool transfer_in_progress;
 	int transfer_count;
 	spinlock_t spi_lock;
 	// ------------------------------------------
@@ -474,16 +475,24 @@ static void start_transmitting_done( uint16_t send_data, uint16_t recv_data )
 	}
 }
 
+#if 0
 static void start_transmitting_done2( uint16_t send_data, uint16_t recv_data )
 {
 	LOG( "start_transmitting_done2" );
 }
+#else
+#define start_transmitting_done2 0
+#endif
 
+#if 0
 static void irq_msg_write_done( uint16_t send_data, uint16_t recv_data )
 {
 	LOG( "irq_msg_write_done" );
 	// nothing to do here
 }
+#else
+#define irq_msg_write_done 0
+#endif
 
 static void irq_msg_read_done( uint16_t send_data, uint16_t recv_data )
 {
@@ -546,11 +555,15 @@ static void irq_msg_read_done( uint16_t send_data, uint16_t recv_data )
 	}
 }
 
+#if 0
 static void stop_transmitting_done( uint16_t send_data, uint16_t recv_data )
 {
 	LOG( "stop_transmitting_done" );
 	// nothing to do here
 }
+#else
+#define stop_transmitting_done 0
+#endif
 
 static enum hrtimer_restart last_byte_sent( struct hrtimer *timer )
 {
@@ -559,11 +572,15 @@ static enum hrtimer_restart last_byte_sent( struct hrtimer *timer )
 	return HRTIMER_NORESTART;
 }
 
+#if 0
 static void configure_uart_done( uint16_t send_data, uint16_t recv_data )
 {
 	LOG( "configure_uart_done" );
 	// nothing to do here
 }
+#else
+#define configure_uart_done 0
+#endif
 
 
 // }}} spi functions
@@ -963,8 +980,6 @@ static int rpc_tty_write( struct tty_struct* tty,
 			// send the first byte
 			data = rpc_max3140_make_write_data_cmd( buf[0] );
 			rcd.UartConfig |= MAX3140_CFG_ENABLE_TX_INT;
-			// rpc_spi_msg2_async( &start_transmitting, data, UartConfig );
-			// rpc_spi_transfer_word( data, start_transmitting_done );
 			rpc_spi_transfer_word( rcd.UartConfig, start_transmitting_done2 );
 			rpc_spi_transfer_word( data, start_transmitting_done );
 			rc++;
@@ -1261,6 +1276,7 @@ static bool rpc_spi_start_transfer(void)
 		else
 		{
 			LOG( "rpc_spi_start_transfer: wrote %04X", data );
+			rcd.transfer_in_progress = true;
 		}
 	}
 	spin_unlock_irqrestore( &rcd.spi_lock, spinlock_flags );
@@ -1269,14 +1285,6 @@ static bool rpc_spi_start_transfer(void)
 
 /* SPI interrupt function called when a transfer is complete.
  */
-/*
-
-[10684.354768] rpc: rpc_tty_open() was successful
-[11069.285374] rpc: rpc_spi_interrupt: error reading FIFO (11)
-[11069.285403] rpc: WrCfg CC0B FEN=0 SHDN=0 TM=1 RM=1 PM=0 RAM=0 IR=0 ST=0 PE=0 L=0 BR=B -- FFFFFFFF R=1 T=1
-[11171.858334] rpc: rpc_tty_close: device was closed
-
-*/
 static irqreturn_t rpc_spi_interrupt( int irq, void *dev_id )
 {
 	unsigned long spinlock_flags;
@@ -1287,30 +1295,7 @@ static irqreturn_t rpc_spi_interrupt( int irq, void *dev_id )
 
 	spin_lock_irqsave( &rcd.spi_lock, spinlock_flags );
 	t = rcd.transfers[0];
-	rcd.transfer_count--;
-	more = rcd.transfer_count;
-	if( more )
-	{
-		// remove the transfer from the list by moving all others one down
-		memmove( rcd.transfers, rcd.transfers+1,
-				rcd.transfer_count*sizeof(*rcd.transfers) );
-	}
-	spin_unlock_irqrestore( &rcd.spi_lock, spinlock_flags );
-#if 0
-	{
-		unsigned int x = rpc_spi_read_reg( BCM2835_SPI_CS );
-		LOG( "SPI IRQ: %08X done=%d", x, (x&BCM2835_SPI_CS_DONE) != 0 );
-	}
-#endif
-	rpc_spi_write_reg( BCM2835_SPI_CS, SPI_CS_DONE );
-#if 0
-	{
-		unsigned int x = rpc_spi_read_reg( BCM2835_SPI_CS );
-		LOG( "SPI IRQ: %08X done=%d", x, (x&BCM2835_SPI_CS_DONE) != 0 );
-	}
-#endif
-	// read the bytes from the SPI receive FIFO
-	// ok = rpc_spi_read_fifo( &h ) && rpc_spi_read_fifo( &l );
+
 	read_err = 0;
 	h = l = 0;
 	if( !rpc_spi_read_fifo( &h ) )
@@ -1322,17 +1307,20 @@ static irqreturn_t rpc_spi_interrupt( int irq, void *dev_id )
 		read_err |= 0x01;
 	}
 	t.recv_data = h<<8 | l;
-#if 0
-	// transfer done
 	rpc_spi_write_reg( BCM2835_SPI_CS, SPI_CS_DONE );
-		udelay( 1 );
-		rpc_spi_write_reg( BCM2835_SPI_CS, SPI_CS_RESET	);
-	rpc_spi_write_reg( BCM2835_SPI_CS, SPI_CS_RESET );
-	rpc_spi_write_reg( BCM2835_SPI_DLEN, 0 );
-#endif
+	rcd.transfer_in_progress = false;
 	if( read_err == 0 )
 	{
-		// LOG( "pc_spi_interrupt: received %04X", t.recv_data );
+		// SPI transfer finished
+		rcd.transfer_count--;
+		more = rcd.transfer_count;
+		if( more )
+		{
+			// remove the transfer from the list by moving all others one down
+			memmove( rcd.transfers, rcd.transfers+1,
+					rcd.transfer_count*sizeof(*rcd.transfers) );
+		}
+		spin_unlock_irqrestore( &rcd.spi_lock, spinlock_flags );
 #ifdef DEBUG
 		log_max3140_message( t.send_data, t.recv_data, 0 );
 #endif
@@ -1340,10 +1328,13 @@ static irqreturn_t rpc_spi_interrupt( int irq, void *dev_id )
 		{
 			t.callback( t.send_data, t.recv_data );
 		}
-		LOG( "MAX3140 IRQ %d", gpio_get_value( rcd.irqGPIO ) );
+		// LOG( "MAX3140 IRQ %d", gpio_get_value( rcd.irqGPIO ) );
 	}
 	else
 	{
+		// SPI transfer failed, try it again
+		spin_unlock_irqrestore( &rcd.spi_lock, spinlock_flags );
+		more = true;
 		LOG_ERR( "rpc_spi_interrupt: error reading FIFO (%02X)", read_err );
 		log_max3140_message( t.send_data, -1, 1 );
 		rpc_spi_write_reg( BCM2835_SPI_CS, SPI_CS_RESET );
@@ -1358,14 +1349,18 @@ static irqreturn_t rpc_spi_interrupt( int irq, void *dev_id )
 
 bool rpc_spi_transfer_word( uint16_t send_data, rpc_spi_callback_t callback )
 {
+	unsigned long spinlock_flags;
+
 	if( rcd.transfer_count >= (SPI_MAX_TRANSFER_COUNT-1) )
 	{
 		return false;
 	}
+	spin_lock_irqsave( &rcd.spi_lock, spinlock_flags );
 	rcd.transfers[rcd.transfer_count].send_data = send_data;
 	rcd.transfers[rcd.transfer_count].recv_data = 0;
 	rcd.transfers[rcd.transfer_count].callback = callback;
 	rcd.transfer_count++;
+	spin_unlock_irqrestore( &rcd.spi_lock, spinlock_flags );
 	rpc_spi_start_transfer();
 	return true;
 }
