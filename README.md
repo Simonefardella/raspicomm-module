@@ -19,5 +19,5 @@ Tip:
 
 ## Binaries
 
- * [raspicommrs485.ko for kernel 4.14.34-v7+ (md5sum 9371e7f9a4fbc2d0cce159b7334ba57d)](https://github.com/Martin-Furter/raspicomm-module/raw/master/binaries/4.14.34-v7%2B/raspicommrs485.ko)
+ * [raspicommrs485.ko V1.0.1 for kernel 4.14.34-v7+ (md5sum 58d2016b744f12249f009dcf14d8ce64)](https://github.com/Martin-Furter/raspicomm-module/raw/master/binaries/4.14.34-v7%2B/raspicommrs485.ko)
 
