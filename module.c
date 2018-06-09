@@ -590,7 +590,7 @@ static void configure_uart_done( uint16_t send_data, uint16_t recv_data )
 static void rpc_tty_cleanup( struct platform_device* pdev )
 {
 	unsigned long spinlock_flags;
-	LOG( "cleanup all" );
+	LOG_DBG( "cleanup all" );
 
 	spin_lock_irqsave( &rcd.dev_lock, spinlock_flags );
 	// set the shutdown flag
@@ -602,13 +602,13 @@ static void rpc_tty_cleanup( struct platform_device* pdev )
 	// remove the interrupt
 	if( rcd.irqNumber >= 0 )
 	{
-		LOG( "free_irq" );
+		LOG_DBG( "free_irq" );
 		free_irq( rcd.irqNumber, NULL );
 	}
 	// cancel the timer
 	if( rcd.last_byte_sent_timer_initialized )
 	{
-		LOG( "hrtimer_cancel" );
+		LOG_DBG( "hrtimer_cancel" );
 		hrtimer_cancel( &rcd.last_byte_sent_timer );
 	}
 
@@ -618,17 +618,17 @@ static void rpc_tty_cleanup( struct platform_device* pdev )
 	// do all the remaining cleanup...
 	if( rcd.tty_drv )
 	{
-		LOG( "tty_unregister_driver" );
+		LOG_DBG( "tty_unregister_driver" );
 		tty_unregister_driver( rcd.tty_drv );
-		LOG( "put_tty_driver" );
+		LOG_DBG( "put_tty_driver" );
 		put_tty_driver( rcd.tty_drv );
 	}
 	if( rcd.irqGPIO >= 0 )
 	{
-		LOG( "gpio_free" );
+		LOG_DBG( "gpio_free" );
 		gpio_free( rcd.irqGPIO );
 	}
-	LOG( "cleanup done" );
+	LOG_DBG( "cleanup done" );
 }
 
 // initialization function that gets called when the module is loaded
@@ -641,7 +641,7 @@ static int rpc_tty_init( struct platform_device* pdev )
 	// log the start of the initialization
 	LOG_INFO( "raspicommrs485 init: version " RASPICOMM_VERSION );
 
-	LOG( "initializing globals" );
+	LOG_DBG( "initializing globals" );
 	// raspicommDriver = NULL;
 	// memset( &Port, 0, sizeof(Port) );
 	// OpenCount = 0;
@@ -670,7 +670,7 @@ static int rpc_tty_init( struct platform_device* pdev )
 	cs[i] = of_get_named_gpio( np, "cs-gpios", 1 );
 #endif
 	// Request a GPIO pin from the driver
-	LOG( "gpio_request" );
+	LOG_DBG( "gpio_request" );
 	result = gpio_request( pin, "rpc0irq" );
 	if( result < 0 )
 	{
@@ -680,7 +680,7 @@ static int rpc_tty_init( struct platform_device* pdev )
 	rcd.irqGPIO = pin;
 	// 'irqGPIO' is expected to be an unsigned int, i.e. the GPIO number
 	// Set GPIO as input
-	LOG( "gpio_direction_input" );
+	LOG_DBG( "gpio_direction_input" );
 	result = gpio_direction_input( rcd.irqGPIO );
 	if( result < 0 )
 	{
@@ -689,7 +689,7 @@ static int rpc_tty_init( struct platform_device* pdev )
 	}
 
 	// map your GPIO to an IRQ
-	LOG( "gpio_to_irq( %d )", rcd.irqGPIO );
+	LOG_DBG( "gpio_to_irq( %d )", rcd.irqGPIO );
 	rcd.irqNumber = gpio_to_irq( rcd.irqGPIO );
 	if( rcd.irqNumber < 0 )
 	{
@@ -697,7 +697,7 @@ static int rpc_tty_init( struct platform_device* pdev )
 		goto cleanup;
 	}
 	// requested interrupt
-	LOG( "request_irq = %d", rcd.irqNumber );
+	LOG_DBG( "request_irq = %d", rcd.irqNumber );
 	result = request_irq( rcd.irqNumber, raspicomm_irq_handler,
 						// interrupt mode flag
 						IRQF_TRIGGER_FALLING,
@@ -712,12 +712,12 @@ static int rpc_tty_init( struct platform_device* pdev )
 	}
 
 	// initialize the port
-	LOG( "tty_port_init" );
+	LOG_DBG( "tty_port_init" );
 	tty_port_init( &rcd.tty_port );
 	rcd.tty_port.low_latency = 1;
 
 	// allocate the driver
-	LOG( "tty_alloc_driver" );
+	LOG_DBG( "tty_alloc_driver" );
 	rcd.tty_drv = tty_alloc_driver( PORT_COUNT, TTY_DRIVER_REAL_RAW );
 
 	// return if allocation fails
@@ -752,22 +752,22 @@ static int rpc_tty_init( struct platform_device* pdev )
 
 	// initialize function callbacks of tty_driver,
 	// necessary before tty_register_driver()
-	LOG( "tty_set_operations" );
+	LOG_DBG( "tty_set_operations" );
 	tty_set_operations( rcd.tty_drv, &raspicomm_ops );
 
 	// link the port with the driver
-	LOG( "tty_port_link_device" );
+	LOG_DBG( "tty_port_link_device" );
 	tty_port_link_device( &rcd.tty_port, rcd.tty_drv, 0 );
 
 	// try to register the tty driver
-	LOG( "tty_register_driver" );
+	LOG_DBG( "tty_register_driver" );
 	if( tty_register_driver( rcd.tty_drv ) )
 	{
 		LOG_ERR( "tty_register_driver failed" );
 		goto cleanup;
 	}
 
-	LOG( "initializing hrtimer" );
+	LOG_DBG( "initializing hrtimer" );
 	hrtimer_init( &rcd.last_byte_sent_timer, CLOCK_MONOTONIC, HRTIMER_MODE_REL );
 	rcd.last_byte_sent_timer.function = &last_byte_sent;
 	rcd.last_byte_sent_timer_initialized = 1;
@@ -917,7 +917,7 @@ static void raspicomm_rs485_received( struct tty_struct* tty, int c )
 // called by the kernel when open() is called for the device
 static int rpc_tty_open( struct tty_struct* tty, struct file* file )
 {
-	LOG( "rpc_tty_open() called" );
+	LOG_DBG( "rpc_tty_open() called" );
 
 	if( rcd.tty_opened )
 	{
@@ -938,7 +938,7 @@ static int rpc_tty_open( struct tty_struct* tty, struct file* file )
 // called by the kernel when close() is called for the device
 static void rpc_tty_close( struct tty_struct* tty, struct file* file )
 {
-	LOG( "rpc_tty_close called" );
+	LOG_DBG( "rpc_tty_close called" );
 	if( !rcd.tty_opened )
 	{
 		LOG_ERR( "rpc_tty_close: can't close device since it is already closed" );
@@ -1232,7 +1232,7 @@ static void rpc_spi_cancel_transfers_and_wait(void)
 	}
 	if( tcnt != 0 )
 	{
-		LOG( "rpc_spi_cancel_transfers_and_wait: timeout waiting for eond of transfers" );
+		LOG_DBG( "rpc_spi_cancel_transfers_and_wait: timeout waiting for eond of transfers" );
 		rpc_spi_reset();
 	}
 }
@@ -1394,7 +1394,7 @@ int rpc_spi_bcm2835_init( struct platform_device* pdev )
 		err = rcd.spi_irq ? rcd.spi_irq : -ENODEV;
 		goto out_master_put;
 	}
-	LOG( "spi_irq = %d", rcd.spi_irq );
+	LOG_DBG( "spi_irq = %d", rcd.spi_irq );
 
 	spin_lock_init( &rcd.spi_lock );
 
