@@ -23,5 +23,8 @@ Tip:
 
 ## Known Bugs
 
-From time to time there is an SPI error. The SPI transfer done interrupt is fired, but the FIFO is empty and no data can be read. Since this seems to only happen for "WrCfg" commands my solution is to restart the transfer if it failed. I don't know how to properly fix this since i do not know the real cause.
+From time to time there is an SPI error. The SPI transfer done interrupt is fired, but the FIFO is empty and no data can be read. Since this seems to only happen for "WrCfg" commands my solution is to restart the transfer if it failed. I don't know how to properly fix this since i do not know the real cause.  
+When this error happens the following messages appear in the log:  
+`[<time>] rpc: rpc_spi_interrupt: error reading FIFO (11)`  
+`[<time>] rpc: WrCfg CC4B FEN=0 SHDN=0 TM=1 RM=1 PM=0 RAM=0 IR=0 ST=1 PE=0 L=0 BR=B -- FFFFFFFF R=1 T=1`
 
