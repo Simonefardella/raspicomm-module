@@ -922,8 +922,8 @@ static int rpc_tty_open( struct tty_struct* tty, struct file* file )
 	if( rcd.tty_opened )
 	{
 		LOG_ERR( "rpc_tty_open() was not successful as rcd.tty_opened != 0 - Trying to close port and reopen" );
-		rpc_tty_close(tty_struct* tty, file* file );
-		rpc_tty_open(tty_struct* tty, file* file );
+		rpc_tty_close(tty, file );
+		rpc_tty_open(tty, file );
 	}
 	else
 	{
