@@ -918,22 +918,16 @@ static void raspicomm_rs485_received( struct tty_struct* tty, int c )
 static int rpc_tty_open( struct tty_struct* tty, struct file* file )
 {
 	LOG_DBG( "rpc_tty_open() called" );
+    //LOG_ERR( "rpc_tty_open() was not successful as rcd.tty_opened != 0 - Trying to close port and reopen" );
+    rpc_tty_close(tty, file );
 
-	if( rcd.tty_opened )
-	{
-		LOG_ERR( "rpc_tty_open() was not successful as rcd.tty_opened != 0 - Trying to close port and reopen" );
-		rpc_tty_close(tty, file );
-		return rpc_tty_open(tty, file );
-	}
-	else
-	{
-		LOG_INFO( "rpc_tty_open() was successful" );
+    LOG_INFO( "rpc_tty_open() was successful" );
 
-		rcd.tty_open = tty;
-		rcd.tty_opened = 1;
+    rcd.tty_open = tty;
+    rcd.tty_opened = 1;
 
-		return SUCCESS;
-	}
+    return SUCCESS;
+
 }
 
 // called by the kernel when close() is called for the device
