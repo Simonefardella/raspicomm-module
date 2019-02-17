@@ -915,7 +915,7 @@ static void raspicomm_rs485_received( struct tty_struct* tty, int c )
 // {{{ TTY Interface Functions
 
 // called by the kernel when open() is called for the device
-static int rpc_tty_open( struct tty_struct* tty, struct file* file )
+static void rpc_tty_open( struct tty_struct* tty, struct file* file )
 {
 	LOG_DBG( "rpc_tty_open() called" );
 
@@ -928,11 +928,8 @@ static int rpc_tty_open( struct tty_struct* tty, struct file* file )
 	else
 	{
 		LOG_INFO( "rpc_tty_open() was successful" );
-
 		rcd.tty_open = tty;
 		rcd.tty_opened = 1;
-
-		return SUCCESS;
 	}
 }
 
