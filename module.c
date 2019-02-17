@@ -918,7 +918,7 @@ static void raspicomm_rs485_received( struct tty_struct* tty, int c )
 static int rpc_tty_open( struct tty_struct* tty, struct file* file )
 {
 	LOG_DBG( "rpc_tty_open() called" );
-    rpc_spi_reset()
+    rpc_spi_reset();
     rcd.tty_open = tty;
     rcd.tty_opened = 1;
 
