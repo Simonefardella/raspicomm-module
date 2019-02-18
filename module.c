@@ -918,12 +918,21 @@ static void raspicomm_rs485_received( struct tty_struct* tty, int c )
 static int rpc_tty_open( struct tty_struct* tty, struct file* file )
 {
 	LOG_DBG( "rpc_tty_open() called" );
- 
-    rcd.tty_open = tty;
-    rcd.tty_opened = 1;
 
-    return SUCCESS;
+	if( rcd.tty_opened )
+	{
+		LOG_ERR( "rpc_tty_open() was not successful as rcd.tty_opened != 0" );
+		return -ENODEV;
+	}
+	else
+	{
+		LOG_INFO( "rpc_tty_open() was successful" );
 
+		rcd.tty_open = tty;
+		rcd.tty_opened = 1;
+
+		return SUCCESS;
+	}
 }
 
 // called by the kernel when close() is called for the device
@@ -1480,10 +1489,9 @@ static struct platform_driver raspicomm_driver = {
 };
 module_platform_driver( raspicomm_driver );
 
-MODULE_DESCRIPTION( "Raspicomm kernel module for RS485 tty driver."
-"\n                This module includes driver code for the Broadcom BCM2835 SPI controller."
-"\n                https://github.com/Martin-Furter/raspicomm-module/" );
-MODULE_AUTHOR( "Martin Furter (mf), mdk" );
+MODULE_DESCRIPTION( "RS485 kernel module for RS485 tty driver."
+"\n                This module includes driver code for the Broadcom BCM2835 SPI controller.");
+MODULE_AUTHOR( "Fardella Simone, Martin Furter (mf), mdk" );
 MODULE_LICENSE( "GPL v2" );
 MODULE_VERSION( RASPICOMM_VERSION );
 MODULE_SUPPORTED_DEVICE( "ttyRPC" );
