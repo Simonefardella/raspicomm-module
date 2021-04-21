@@ -1337,7 +1337,7 @@ static irqreturn_t rpc_spi_interrupt( int irq, void *dev_id )
 		more = true;
 		LOG_ERR( "rpc_spi_interrupt: error reading FIFO (%02X)", read_err );
 		log_max3140_message( t.send_data, -1, 1 );
-		rpc_spi_write_reg( BCM2835_SPI_CS, SPI_CS_RESET );
+		rpc_spi_reset();
 	}
 	if( more )
 	{
